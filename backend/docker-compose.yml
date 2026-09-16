@@ -1,0 +1,22 @@
+services:
+  mongo:
+    image: mongo:8.0
+    container_name: data-crawler-mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: crawler
+      MONGO_INITDB_ROOT_PASSWORD: crawlerpass
+      MONGO_INITDB_DATABASE: data_crawler
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  mongo_data:

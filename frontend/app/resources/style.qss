@@ -1,0 +1,206 @@
+/* Data Crawler — global stylesheet (light, indigo accent) */
+
+QWidget {
+    font-family: "SF Pro Text", "Segoe UI", "Helvetica Neue", sans-serif;
+    font-size: 13px;
+    color: #1F2430;
+}
+
+QMainWindow,
+QWidget#loginRoot,
+QWidget#mainRoot,
+QWidget#loadingRoot {
+    background-color: #F5F6FA;
+}
+
+/* --- Inputs --------------------------------------------------------------- */
+
+QLineEdit {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    border-radius: 8px;
+    min-height: 36px;
+    padding: 0 12px;
+    selection-background-color: #4F46E5;
+    selection-color: #FFFFFF;
+}
+QLineEdit:focus {
+    border: 1px solid #4F46E5;
+}
+QLineEdit:disabled {
+    background-color: #F3F4F6;
+    color: #9CA3AF;
+}
+
+/* --- Buttons --------------------------------------------------------------- */
+
+QPushButton {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    border-radius: 8px;
+    min-height: 36px;
+    padding: 0 16px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: #F3F4F6;
+}
+QPushButton:pressed {
+    background-color: #E9EBF0;
+}
+QPushButton:disabled {
+    background-color: #F3F4F6;
+    border-color: #E2E4EA;
+    color: #9CA3AF;
+}
+
+QPushButton#primaryButton {
+    background-color: #4F46E5;
+    border: 1px solid #4F46E5;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+QPushButton#primaryButton:hover {
+    background-color: #4338CA;
+    border-color: #4338CA;
+}
+QPushButton#primaryButton:pressed {
+    background-color: #3730A3;
+    border-color: #3730A3;
+}
+QPushButton#primaryButton:disabled {
+    background-color: #A5B4FC;
+    border-color: #A5B4FC;
+    color: #EEF2FF;
+}
+
+QPushButton#navButton {
+    border: none;
+    border-radius: 8px;
+    background-color: transparent;
+    color: #6B7280;
+    padding: 0 14px;
+}
+QPushButton#navButton:hover {
+    color: #1F2430;
+    background-color: #F3F4F6;
+}
+QPushButton#navButton:checked {
+    color: #4F46E5;
+    background-color: #EEF2FF;
+    font-weight: 600;
+}
+
+QPushButton#logoutButton {
+    color: #DC2626;
+    background-color: transparent;
+    border: 1px solid transparent;
+}
+QPushButton#logoutButton:hover {
+    background-color: #FEF2F2;
+    border-color: #FECACA;
+}
+QPushButton#logoutButton:pressed {
+    background-color: #FEE2E2;
+}
+
+/* --- Login card ------------------------------------------------------------ */
+
+QFrame#loginCard {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    border-radius: 12px;
+}
+
+QFrame#segmentedHost {
+    background-color: #F3F4F6;
+    border-radius: 8px;
+}
+
+QScrollArea#loginScroll {
+    background: transparent;
+    border: none;
+}
+
+QWidget#loginScrollContent {
+    background: transparent;
+}
+QPushButton#modeToggle {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    color: #6B7280;
+}
+QPushButton#modeToggle:hover {
+    color: #1F2430;
+}
+QPushButton#modeToggle:checked {
+    background-color: #FFFFFF;
+    color: #1F2430;
+    font-weight: 600;
+}
+
+/* --- Header ---------------------------------------------------------------- */
+
+QFrame#header {
+    background-color: #FFFFFF;
+    border: none;
+    border-bottom: 1px solid #E2E4EA;
+}
+
+/* --- Labels ----------------------------------------------------------------- */
+
+QLabel#appTitle {
+    font-size: 24px;
+    font-weight: 700;
+}
+QLabel#cardTitle {
+    font-size: 20px;
+    font-weight: 700;
+}
+QLabel#cardSubtitle {
+    color: #6B7280;
+}
+QLabel#fieldCaption {
+    font-size: 12px;
+    font-weight: 600;
+    color: #4B5563;
+}
+QLabel#userEmail {
+    color: #374151;
+    font-weight: 600;
+}
+QLabel#pageTitle {
+    font-size: 22px;
+    font-weight: 700;
+    color: #374151;
+}
+
+QLabel#errorBanner {
+    background-color: #FEF2F2;
+    color: #DC2626;
+    border: 1px solid #FECACA;
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+QLabel#warningBanner {
+    background-color: #FFFBEB;
+    color: #B45309;
+    border: 1px solid #FDE68A;
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+
+/* --- Progress ---------------------------------------------------------------- */
+
+QProgressBar {
+    background-color: #E5E7EB;
+    border: none;
+    border-radius: 4px;
+    min-height: 8px;
+    max-height: 8px;
+}
+QProgressBar::chunk {
+    background-color: #4F46E5;
+    border-radius: 4px;
+}
