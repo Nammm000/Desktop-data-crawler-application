@@ -62,10 +62,21 @@ All routes are prefixed with `/api/v1`. JSON uses camelCase
 | POST | `/auth/logout` | — | `{refreshToken}` | `204` (idempotent) | `422` |
 | POST | `/auth/change-password` | Bearer | `{currentPassword, newPassword}` | `200` fresh `TokenPair` | `401` bad token, `403` wrong password, `400` same password |
 | GET | `/users/me` | Bearer | — | `200` `UserOut` | `401`, `403` not active |
+| GET | `/users` | Bearer (admin) | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `UserList` `{users, total}` | `401`, `403` non-admin |
+| PATCH | `/users/{userId}/status` | Bearer (admin) | `{status}` active/inactive/banned | `200` `UserOut` | `401`, `403`, `400` self-target, `404`, `422` |
+| PATCH | `/users/{userId}/role` | Bearer (admin) | `{role}` admin/user | `200` `UserOut` | `401`, `403`, `400` self-target, `404`, `422` |
+| DELETE | `/users/{userId}` | Bearer (admin) | — | `204` | `401`, `403`, `400` self-target, `404` |
+| DELETE | `/users` | Bearer (admin) | `{userIds}` (list, ≥1) | `200` `{"deleted": n}` | `401`, `403`, `400` self in list, `422` |
 
 `UserOut`: `{id, username, email, role, status, createdAt}` — `passwordHash` is
 never exposed. `role` is `admin` or `user`; `status` is a plain string
 (`active` / `inactive` / `banned`) and only `active` users may log in.
+
+Admin endpoints: `GET /users` lists newest-first with `?limit=&skip=`; banning or
+deactivating a user (`status` ≠ `active`) immediately revokes all of their refresh
+tokens (un-banning restores nothing — they log in again); role changes apply on
+the target's next request (role is re-read from the DB, not the JWT). Admins get
+`400` when targeting their own account, preventing self-lockout.
 
 ### Quick smoke test
 
@@ -82,6 +93,18 @@ curl -s -X POST $BASE/auth/login -H 'Content-Type: application/json' \
 
 # Protected endpoint
 curl -s $BASE/users/me -H "Authorization: Bearer <accessToken>"
+
+# Admin: list users (paginated) / change status / change role
+curl -s "$BASE/users?limit=20&skip=0" -H "Authorization: Bearer <accessToken>"
+curl -s -X PATCH $BASE/users/<userId>/status -H "Authorization: Bearer <accessToken>" \
+  -H 'Content-Type: application/json' -d '{"status":"banned"}'
+curl -s -X PATCH $BASE/users/<userId>/role -H "Authorization: Bearer <accessToken>" \
+  -H 'Content-Type: application/json' -d '{"role":"user"}'
+
+# Admin: delete one user / delete many users (cascades their refresh tokens)
+curl -s -X DELETE $BASE/users/<userId> -H "Authorization: Bearer <accessToken>"
+curl -s -X DELETE $BASE/users -H "Authorization: Bearer <accessToken>" \
+  -H 'Content-Type: application/json' -d '{"userIds":["<userId1>","<userId2>"]}'
 
 # Rotate tokens
 curl -s -X POST $BASE/auth/refresh -H 'Content-Type: application/json' \
@@ -106,7 +129,7 @@ app/
 ├── services/token_service.py# Refresh token issue/rotate/revoke + reuse detection
 └── api/
     ├── deps.py              # get_current_user / get_current_admin dependencies
-    └── routes/              # auth.py (5 endpoints), users.py (GET /users/me)
+    └── routes/              # auth.py (5 endpoints), users.py (GET /users/me + 5 admin endpoints)
 ```
 
 ## MongoDB
@@ -144,4 +167,5 @@ Collections:
 - Rate limiting on `/auth/login`
 - Tests (pytest + httpx against a test Mongo)
 - First-registered-user-becomes-admin bootstrap (or an admin CLI command)
+- Last-admin protection (self-guard exists, but two admins can still demote each other)
 - Email verification / password reset flows

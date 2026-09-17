@@ -66,3 +66,6 @@ Topic-specific conventions live in `.claude/rules/`:
 | `database-mongodb.md` | Motor usage, collections, index policy | when editing `app/db/`, `app/services/`, `docker-compose.yml` |
 | `coding-conventions.md` | Python/Pydantic style, layering, dependency injection | when editing `app/**/*.py` |
 | `verification.md` | End-to-end smoke-test workflow | every session |
+| `project-overview.md` | Full reference: stack, features, API surface, config, setup | when editing `README.md`, `docker-compose.yml`, `.env.example` |
+| `architecture.md` | Layering, request lifecycle, token architecture, sequence diagrams | when editing `app/**` |
+| `database-schema.md` | Collections, document shapes, indexes, TTL, query patterns | when editing `app/db/`, `app/services/`, `app/models/`, `docker-compose.yml` |

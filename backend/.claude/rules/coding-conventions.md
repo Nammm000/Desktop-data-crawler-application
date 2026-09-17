@@ -29,7 +29,8 @@ paths:
 ## Dependency injection
 
 - Reuse the existing aliases instead of raw `Depends`:
-  `DbDep` (`app/api/deps.py`), `CurrentUser`, `SettingsDep` (`app/core/config.py`).
+  `DbDep` / `CurrentUser` / `AdminUser` (`app/api/deps.py`),
+  `SettingsDep` (`app/core/config.py`).
 - Settings: `get_settings()` is `@lru_cache`d — read config through it, never
   `os.getenv`, never instantiate `Settings()` elsewhere.
 

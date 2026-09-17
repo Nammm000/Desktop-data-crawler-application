@@ -109,3 +109,8 @@ async def revoke_all_for_user(db: AsyncIOMotorDatabase, user_id: str) -> None:
         {"userId": user_id, "revokedAt": None},
         {"$set": {"revokedAt": _now()}},
     )
+
+
+async def delete_for_users(db: AsyncIOMotorDatabase, user_ids: list[str]) -> None:
+    """Hard-delete every refresh token of the given users (cascade on user deletion)."""
+    await db[REFRESH_TOKENS_COLLECTION].delete_many({"userId": {"$in": user_ids}})

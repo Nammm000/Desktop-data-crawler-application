@@ -60,3 +60,6 @@ async def get_current_admin(user: CurrentUser) -> dict:
             status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required"
         )
     return user
+
+
+AdminUser = Annotated[dict, Depends(get_current_admin)]

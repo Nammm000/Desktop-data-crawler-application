@@ -16,6 +16,11 @@ paths:
 | POST | `/api/v1/auth/logout` | — | `{refreshToken}` | `204` idempotent | `422` |
 | POST | `/api/v1/auth/change-password` | Bearer | `{currentPassword, newPassword}` | `200 TokenPair` | `401`, `403`, `400` same pw, `422` |
 | GET | `/api/v1/users/me` | Bearer | — | `200 UserOut` | `401`, `403` |
+| GET | `/api/v1/users` | Bearer (admin) | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 UserList` `{users, total}` | `401`, `403` |
+| PATCH | `/api/v1/users/{userId}/status` | Bearer (admin) | `{status}` active/inactive/banned | `200 UserOut` | `401`, `403`, `400` self-target, `404`, `422` |
+| PATCH | `/api/v1/users/{userId}/role` | Bearer (admin) | `{role}` admin/user | `200 UserOut` | `401`, `403`, `400` self-target, `404`, `422` |
+| DELETE | `/api/v1/users/{userId}` | Bearer (admin) | — | `204` | `401`, `403`, `400` self-target, `404` |
+| DELETE | `/api/v1/users` | Bearer (admin) | `{userIds}` (list, ≥1) | `200 {deleted: n}` | `401`, `403`, `400` self in list, `422` |
 
 When adding/removing/changing an endpoint, update this table and the README.
 
@@ -30,6 +35,11 @@ When adding/removing/changing an endpoint, update this table and the README.
   `ConfigDict(alias_generator=to_camel, populate_by_name=True)` (see `_CamelModel`
   in `app/schemas/auth.py`). Python fields stay snake_case.
 - Errors always use FastAPI's `{"detail": "..."}` shape via `HTTPException`.
+- Admin endpoints guard via `AdminUser` (`Depends(get_current_admin)`, `app/api/deps.py`).
+  Setting a user's status to anything but `active` also revokes all of that user's
+  refresh tokens; deleting a user hard-deletes their refresh tokens (a replayed token
+  then reads as unknown → 401, no cascade); admins cannot target their own account
+  (400 self-guard — status, role, and delete).
 - Password constraints live in `PASSWORD_FIELD` and `_check_password_bytes`
   (`app/schemas/auth.py`) — reuse them; never redefine per-endpoint rules.
 
@@ -39,4 +49,6 @@ When adding/removing/changing an endpoint, update this table and the README.
 - `403`: authenticated but not allowed (wrong current password, banned account, non-admin)
 - `409`: unique-constraint conflict (`DuplicateKeyError` → distinct email vs username message)
 - `422`: request validation (let Pydantic produce these; don't hand-roll)
-- `400`: semantically valid but rejected request (e.g. new password equals current)
+- `400`: semantically valid but rejected request (e.g. new password equals current,
+  admin targeting their own account)
+- `404`: path parameter matches no document (e.g. unknown `{userId}`)
