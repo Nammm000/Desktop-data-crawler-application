@@ -45,6 +45,12 @@ class TokenPair:
     user: User
 
 
+@dataclass(frozen=True)
+class UserPage:
+    users: tuple[User, ...]
+    total: int
+
+
 def _parse_user(data: dict) -> User:
     created_at = None
     raw = data.get("createdAt")
@@ -70,6 +76,13 @@ def _parse_token_pair(data: dict) -> TokenPair:
         token_type=data.get("tokenType", "bearer"),
         expires_in=int(data.get("expiresIn", 0)),
         user=_parse_user(data["user"]),
+    )
+
+
+def _parse_user_page(data: dict) -> UserPage:
+    return UserPage(
+        users=tuple(_parse_user(u) for u in data["users"]),
+        total=int(data["total"]),
     )
 
 
@@ -99,6 +112,7 @@ class ApiClient:
         path: str,
         *,
         json_body: dict | None = None,
+        params: dict | None = None,
         bearer: str | None = None,
     ) -> dict | None:
         headers = {"Accept": "application/json"}
@@ -109,6 +123,7 @@ class ApiClient:
                 method,
                 f"{self.base_url}{path}",
                 json=json_body,
+                params=params,
                 headers=headers,
                 timeout=self.timeout,
             )
@@ -200,4 +215,35 @@ class ApiClient:
 
     def get_current_user(self, *, access_token: str) -> User:
         payload = self._request("GET", "/api/v1/users/me", bearer=access_token)
+        return _parse_or_fail(payload, _parse_user)
+
+    def list_users(
+        self, *, access_token: str, limit: int = 50, skip: int = 0
+    ) -> UserPage:
+        payload = self._request(
+            "GET",
+            "/api/v1/users",
+            params={"limit": limit, "skip": skip},
+            bearer=access_token,
+        )
+        return _parse_or_fail(payload, _parse_user_page)
+
+    def update_user_status(
+        self, *, access_token: str, user_id: str, status: str
+    ) -> User:
+        payload = self._request(
+            "PATCH",
+            f"/api/v1/users/{user_id}/status",
+            json_body={"status": status},
+            bearer=access_token,
+        )
+        return _parse_or_fail(payload, _parse_user)
+
+    def update_user_role(self, *, access_token: str, user_id: str, role: str) -> User:
+        payload = self._request(
+            "PATCH",
+            f"/api/v1/users/{user_id}/role",
+            json_body={"role": role},
+            bearer=access_token,
+        )
         return _parse_or_fail(payload, _parse_user)

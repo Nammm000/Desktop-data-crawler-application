@@ -16,12 +16,18 @@ globs: ["app/api/**"]
 | `logout()` | `POST /api/v1/auth/logout` | — | `{refreshToken}` | `None` (204, empty body) | `422` |
 | `change_password()` | `POST /api/v1/auth/change-password` | Bearer | `{currentPassword, newPassword}` | fresh `TokenPair` | `403` wrong password, `400` unchanged |
 | `get_current_user()` | `GET /api/v1/users/me` | Bearer | — | `User` | `401`, `403` |
+| `list_users()` | `GET /api/v1/users?limit&skip` | Bearer | — | `UserPage(users, total)` | `403` non-admin, `422` bad params |
+| `update_user_status()` | `PATCH /api/v1/users/{id}/status` | Bearer | `{status}` (`active/inactive/banned`) | `User` | `400` self-change, `404`, `403` |
+| `update_user_role()` | `PATCH /api/v1/users/{id}/role` | Bearer | `{role}` (`admin/user`) | `User` | `400` self-change, `404`, `403` |
 
 ## Conventions
 
 - This module is the only place that knows the wire format — camelCase keys
   (`accessToken`, `refreshToken`, `createdAt`) never leak past `app/api/client.py`.
 - Lowercase and strip `username` / `email` before sending — mirrors backend validators.
+- `list_users` is skip/limit style (`limit` 1–100, default 50; `skip` ≥ 0), sorted
+  newest-first server-side; the `{"users": [...], "total": n}` envelope parses into
+  `UserPage`. The list/status/role endpoints are admin-only (403 otherwise).
 - `logout` returns 204 with an empty body — `_request` returns `None`, never parse it.
 - Every request goes through the shared `requests.Session` with the standard
   timeout (10 s) so busy states on buttons can never wedge.

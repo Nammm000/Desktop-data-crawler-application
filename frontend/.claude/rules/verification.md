@@ -28,4 +28,17 @@ Checklist before finishing any change (covers every endpoint):
 - Quit + relaunch → loading → straight to main (silent refresh + `/users/me`)
 - Log out → login page; stored token cleared; relaunch stays on login
 - Backend down → amber warning banner, app still usable
-- `change-password` (no UI yet): verify via curl per `backend/.claude/rules/verification.md`
+- Header: Dashboard nav only; email button opens the account menu (Settings /
+  Log out); Settings/Log out work from the menu
+- Settings page shows username/email/role/status/created; Change password
+  dialog: wrong current → backend 403 message; same/short/mismatched password
+  blocked client-side; success → green banner, auto-close, session survives,
+  new password works on next sign-in
+- Dashboard: admin sees the User management card; non-admin sees only
+  `This is the Dashboard page` (create a non-admin by flipping role in mongosh
+  — every signup is admin — then re-login)
+- User management (admin): table newest-first; own row plain text with
+  tooltip; role/status combos change values (ban → target's next login 403);
+  errors (backend down, self-change attempts) show in the banner and revert
+  the combo; limit selector resets to page 1; Previous/Next respect bounds;
+  `Page X of Y` matches `total`

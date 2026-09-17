@@ -34,16 +34,21 @@ thread via queued signals — workers never touch widgets.
 
 ```
 app/
-├── api/client.py               # ApiClient: all 7 endpoints, camelCase JSON, ApiError
+├── api/client.py               # ApiClient: all 10 endpoints, camelCase JSON, ApiError
 ├── core/worker.py              # run_async(): pool threads -> queued signals (GUI thread)
 ├── core/session.py             # SessionController: tokens, refresh, QSettings, forced logout
 ├── ui/widgets.py               # PasswordLineEdit (eye / eye-slash toggle)
 ├── ui/login_page.py            # centered Sign in / Create account card (no header)
-├── ui/main_page.py             # header (nav left, email + logout right) + placeholder pages
+├── ui/dashboard_page.py        # placeholder text + admin-only User management card
+├── ui/settings_page.py         # profile card + Change password button
+├── ui/user_management_page.py  # admin: paginated user table, role/status combos
+├── ui/change_password_dialog.py  # modal dialog (3 PasswordLineEdit fields)
+├── ui/format.py                # format_date / format_role / format_status
+├── ui/main_page.py             # header (Dashboard nav left, account email menu right)
 ├── ui/main_window.py           # QMainWindow: Loading / Login / Main stack
 └── resources/
     ├── style.qss               # the only stylesheet (objectName selectors)
-    └── icons/                  # eye.svg, eye-off.svg (hardcoded stroke color)
+    └── icons/                  # eye.svg, eye-off.svg, chevron-down.svg (hardcoded stroke)
 ```
 
 ## Golden Rules
@@ -53,11 +58,20 @@ app/
 - The backend rotates BOTH tokens on every refresh — single-flight in
   `SessionController._rotate_tokens`; never replay a refresh token (revokes the family)
 - 401 → refresh once → retry once → forced logout if that fails
-- camelCase JSON lives only in `app/api/client.py`; everything else sees `User` / `TokenPair`
+- camelCase JSON lives only in `app/api/client.py`; everything else sees `User` /
+  `TokenPair` / `UserPage`
 - Client validation mirrors the backend (username 3–32 `^[a-zA-Z0-9_.-]+$`,
   password 8–64 chars / ≤72 UTF-8 bytes, email format) and blocks the request
 - The login page never shows a header; the header lives only in `MainPage`
-- Styling only via `app/resources/style.qss` — no `setStyleSheet` in code
+- The header nav is Dashboard only; Settings + Log out live in the account
+  menu behind the email button. The User management entry is admin-only
+  (Dashboard card gated on `user.role == "admin"`)
+- Admin role/status edits go through the per-row combos in
+  `UserManagementPage`; the current user's own row is plain text (the backend
+  rejects self-changes)
+- Styling only via `app/resources/style.qss` — no `setStyleSheet` in code;
+  QSS `image:` urls use the `%icons%` placeholder, substituted with the
+  absolute icons path in `main.py` (QSS resolves urls against the CWD)
 - Verify with the checklist in `.claude/rules/verification.md` before finishing
 
 ## Rule Files

@@ -13,7 +13,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QSettings, Signal
 
-from app.api.client import ApiClient, ApiError, TokenPair, User
+from app.api.client import ApiClient, ApiError, TokenPair, User, UserPage
 from app.core.worker import run_async
 
 _REFRESH_TOKEN_KEY = "auth/refreshToken"
@@ -183,6 +183,54 @@ class SessionController(QObject):
                 on_success(pair)
 
         run_async(work, success, on_error or (lambda _exc: None))
+
+    def list_users(
+        self,
+        limit: int,
+        skip: int,
+        on_success: Callable[[UserPage], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> UserPage:
+            return self._authorized_call(
+                lambda token: self._client.list_users(
+                    access_token=token, limit=limit, skip=skip
+                )
+            )
+
+        run_async(work, on_success or (lambda _page: None), on_error or (lambda _exc: None))
+
+    def update_user_status(
+        self,
+        user_id: str,
+        status: str,
+        on_success: Callable[[User], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> User:
+            return self._authorized_call(
+                lambda token: self._client.update_user_status(
+                    access_token=token, user_id=user_id, status=status
+                )
+            )
+
+        run_async(work, on_success or (lambda _user: None), on_error or (lambda _exc: None))
+
+    def update_user_role(
+        self,
+        user_id: str,
+        role: str,
+        on_success: Callable[[User], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> User:
+            return self._authorized_call(
+                lambda token: self._client.update_user_role(
+                    access_token=token, user_id=user_id, role=role
+                )
+            )
+
+        run_async(work, on_success or (lambda _user: None), on_error or (lambda _exc: None))
 
     # -- token plumbing (worker threads) ------------------------------------
 

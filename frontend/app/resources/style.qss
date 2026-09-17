@@ -91,17 +91,19 @@ QPushButton#navButton:checked {
     font-weight: 600;
 }
 
-QPushButton#logoutButton {
-    color: #DC2626;
+QPushButton#accountButton {
+    color: #374151;
+    font-weight: 600;
     background-color: transparent;
     border: 1px solid transparent;
 }
-QPushButton#logoutButton:hover {
-    background-color: #FEF2F2;
-    border-color: #FECACA;
+QPushButton#accountButton:hover {
+    background-color: #F3F4F6;
+    border-color: #E2E4EA;
 }
-QPushButton#logoutButton:pressed {
-    background-color: #FEE2E2;
+QPushButton#accountButton:pressed {
+    background-color: #E9EBF0;
+    border-color: #E2E4EA;
 }
 
 /* --- Login card ------------------------------------------------------------ */
@@ -115,6 +117,18 @@ QFrame#loginCard {
 QFrame#segmentedHost {
     background-color: #F3F4F6;
     border-radius: 8px;
+}
+
+QFrame#dashboardCard,
+QFrame#settingsCard,
+QFrame#dialogCard {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    border-radius: 12px;
+}
+
+QDialog#changePasswordDialog {
+    background-color: #F5F6FA;
 }
 
 QScrollArea#loginScroll {
@@ -148,6 +162,88 @@ QFrame#header {
     border-bottom: 1px solid #E2E4EA;
 }
 
+QMenu#accountMenu {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    border-radius: 8px;
+    padding: 4px;
+}
+QMenu#accountMenu::item {
+    border-radius: 6px;
+    padding: 6px 24px 6px 12px;
+    color: #1F2430;
+}
+QMenu#accountMenu::item:selected {
+    background-color: #EEF2FF;
+    color: #4F46E5;
+}
+QMenu#accountMenu::item:disabled {
+    color: #9CA3AF;
+}
+
+/* --- User management --------------------------------------------------------- */
+
+QTableWidget#usersTable {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    border-radius: 12px;
+    gridline-color: #F0F1F5;
+    alternate-background-color: #FAFAFC;
+}
+QHeaderView#usersTableHeader::section {
+    background-color: #F9FAFC;
+    border: none;
+    border-bottom: 1px solid #E2E4EA;
+    border-radius: 0;
+    padding: 8px 12px;
+    font-weight: 600;
+    color: #4B5563;
+}
+
+QComboBox#limitSelector,
+QComboBox#roleCombo,
+QComboBox#statusCombo {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    border-radius: 6px;
+    min-height: 28px;
+    padding: 0 10px;
+}
+QComboBox#limitSelector:disabled,
+QComboBox#roleCombo:disabled,
+QComboBox#statusCombo:disabled {
+    background-color: #F3F4F6;
+    color: #9CA3AF;
+}
+QComboBox#limitSelector::drop-down,
+QComboBox#roleCombo::drop-down,
+QComboBox#statusCombo::drop-down {
+    border: none;
+    background: transparent;
+    width: 22px;
+}
+QComboBox#limitSelector::down-arrow,
+QComboBox#roleCombo::down-arrow,
+QComboBox#statusCombo::down-arrow {
+    image: url(%icons%/chevron-down.svg);
+    width: 12px;
+    height: 12px;
+}
+QComboBox#limitSelector QAbstractItemView,
+QComboBox#roleCombo QAbstractItemView,
+QComboBox#statusCombo QAbstractItemView {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    selection-background-color: #EEF2FF;
+    selection-color: #1F2430;
+    outline: none;
+}
+
+QPushButton#pageButton {
+    min-height: 30px;
+    padding: 0 12px;
+}
+
 /* --- Labels ----------------------------------------------------------------- */
 
 QLabel#appTitle {
@@ -166,14 +262,19 @@ QLabel#fieldCaption {
     font-weight: 600;
     color: #4B5563;
 }
-QLabel#userEmail {
-    color: #374151;
-    font-weight: 600;
-}
 QLabel#pageTitle {
     font-size: 22px;
     font-weight: 700;
     color: #374151;
+}
+QLabel#pageSubtitle {
+    color: #6B7280;
+}
+QLabel#pageIndicator {
+    color: #6B7280;
+}
+QLabel#profileValue {
+    font-weight: 500;
 }
 
 QLabel#errorBanner {
@@ -187,6 +288,13 @@ QLabel#warningBanner {
     background-color: #FFFBEB;
     color: #B45309;
     border: 1px solid #FDE68A;
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+QLabel#successBanner {
+    background-color: #ECFDF5;
+    color: #047857;
+    border: 1px solid #A7F3D0;
     border-radius: 8px;
     padding: 10px 12px;
 }

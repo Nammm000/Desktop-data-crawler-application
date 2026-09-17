@@ -19,7 +19,11 @@ _RESOURCES_DIR = Path(__file__).resolve().parent / "app" / "resources"
 
 
 def _load_stylesheet(app: QApplication) -> None:
-    app.setStyleSheet((_RESOURCES_DIR / "style.qss").read_text(encoding="utf-8"))
+    stylesheet = (_RESOURCES_DIR / "style.qss").read_text(encoding="utf-8")
+    # QSS url() paths resolve against the process CWD, not this file — so the
+    # stylesheet references icons via %icons% and we inject the absolute path.
+    icons_url = (_RESOURCES_DIR / "icons").as_posix()
+    app.setStyleSheet(stylesheet.replace("%icons%", icons_url))
 
 
 def main() -> int:

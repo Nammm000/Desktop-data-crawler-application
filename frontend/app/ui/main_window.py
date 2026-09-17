@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
 
         self._session = session
         self._login_page = LoginPage()
-        self._main_page = MainPage()
+        self._main_page = MainPage(session)
 
         self._stack = QStackedWidget()
         self._stack.addWidget(_LoadingPage())  # index 0
@@ -73,12 +73,13 @@ class MainWindow(QMainWindow):
         self._session.backend_warning.connect(self._login_page.show_warning)
 
     def _on_session_started(self, user) -> None:
-        self._main_page.set_user_email(user.email)
+        self._main_page.set_user(user)
         self._login_page.reset()
         self._login_page.clear_warning()
         self._stack.setCurrentWidget(self._main_page)
 
     def _on_session_ended(self, reason: str) -> None:
+        self._main_page.reset()
         self._login_page.set_busy(False)
         self._login_page.reset()
         if reason:

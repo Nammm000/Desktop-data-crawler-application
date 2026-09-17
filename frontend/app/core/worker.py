@@ -8,6 +8,9 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 T = TypeVar("T")
 
+# Signals objects awaiting delivery of their queued result on the GUI thread.
+_PENDING: set[_TaskSignals] = set()
+
 
 class _TaskSignals(QObject):
     finished = Signal(object)  # result value
@@ -40,8 +43,17 @@ def run_async(
     auto-connections resolve to queued connections and the slots execute there.
     """
     signals = _TaskSignals()
+    # Hold the signals object alive until its queued emission has been
+    # delivered: once the pool deletes the finished runnable, its Python
+    # reference would be the last one — and dropping it on the pool thread
+    # would destroy the QObject while the GUI thread is delivering to it.
+    _PENDING.add(signals)
+
+    def _release() -> None:
+        _PENDING.discard(signals)
+
     signals.finished.connect(on_success)
+    signals.finished.connect(_release)  # runs after on_success (connect order)
     signals.failed.connect(on_error)
-    # The runnable owns the signals object for as long as it runs, so the
-    # local reference going out of scope here is safe.
+    signals.failed.connect(_release)
     QThreadPool.globalInstance().start(_Task(fn, signals))

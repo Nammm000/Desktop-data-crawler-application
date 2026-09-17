@@ -1,28 +1,38 @@
-"""Main (post-login) screen: header with nav + user email, placeholder pages."""
+"""Main (post-login) screen: header with nav + account menu, content pages."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from pathlib import Path
+
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QFrame,
     QHBoxLayout,
-    QLabel,
+    QMenu,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from app.api.client import User
+from app.core.session import SessionController
+from app.ui.dashboard_page import DashboardPage
+from app.ui.settings_page import SettingsPage
+from app.ui.user_management_page import UserManagementPage
+
+_ICONS_DIR = Path(__file__).resolve().parent.parent / "resources" / "icons"
+
 
 class MainPage(QWidget):
     logout_requested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, session: SessionController, parent=None):
         super().__init__(parent)
         self.setObjectName("mainRoot")
 
-        # Header: Dashboard / Settings on the left, email + Log out on the right.
+        # Header: Dashboard nav on the left, account menu on the right.
         header = QFrame(objectName="header")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(20, 10, 20, 10)
@@ -31,34 +41,28 @@ class MainPage(QWidget):
         self._dashboard_nav = QPushButton(
             "Dashboard", objectName="navButton", checkable=True
         )
-        self._settings_nav = QPushButton(
-            "Settings", objectName="navButton", checkable=True
-        )
-        nav_group = QButtonGroup(self)
-        nav_group.setExclusive(True)
-        nav_group.addButton(self._dashboard_nav)
-        nav_group.addButton(self._settings_nav)
-
-        self._user_email = QLabel("", objectName="userEmail")
-        logout_button = QPushButton("Log out", objectName="logoutButton")
-        logout_button.clicked.connect(self.logout_requested.emit)
+        self._account_button = QPushButton(objectName="accountButton")
+        self._account_button.setIcon(QIcon(str(_ICONS_DIR / "chevron-down.svg")))
+        self._account_button.clicked.connect(self._open_account_menu)
 
         header_layout.addWidget(self._dashboard_nav)
-        header_layout.addWidget(self._settings_nav)
         header_layout.addStretch(1)
-        header_layout.addWidget(self._user_email)
-        header_layout.addSpacing(12)
-        header_layout.addWidget(logout_button)
+        header_layout.addWidget(self._account_button)
 
-        # Body: the two placeholder pages.
-        self._dashboard_page = self._placeholder_page("This is the Dashboard page")
-        self._settings_page = self._placeholder_page("This is the Settings page")
+        # Body pages.
+        self._dashboard_page = DashboardPage()
+        self._settings_page = SettingsPage(session)
+        self._user_management_page = UserManagementPage(session)
         self._body = QStackedWidget()
         self._body.addWidget(self._dashboard_page)
         self._body.addWidget(self._settings_page)
+        self._body.addWidget(self._user_management_page)
 
         self._dashboard_nav.clicked.connect(self._show_dashboard)
-        self._settings_nav.clicked.connect(self._show_settings)
+        self._dashboard_page.user_management_requested.connect(
+            self._show_user_management
+        )
+        self._body.currentChanged.connect(self._on_body_page_changed)
         self._dashboard_nav.setChecked(True)
 
         root = QVBoxLayout(self)
@@ -67,19 +71,44 @@ class MainPage(QWidget):
         root.addWidget(header)
         root.addWidget(self._body, 1)
 
-    def set_user_email(self, email: str) -> None:
-        self._user_email.setText(email)
+    # -- session state ----------------------------------------------------------
+
+    def set_user(self, user: User) -> None:
+        self._account_button.setText(user.email)
+        self._dashboard_page.set_user(user)
+        self._settings_page.set_user(user)
+
+    def reset(self) -> None:
+        """Clear session data; the next login may be a different user."""
+        self._account_button.setText("")
+        self._dashboard_page.set_user(None)
+        self._settings_page.set_user(None)
+        self._user_management_page.clear()
+        self._body.setCurrentWidget(self._dashboard_page)
+
+    # -- navigation ---------------------------------------------------------------
 
     def _show_dashboard(self) -> None:
         self._body.setCurrentWidget(self._dashboard_page)
 
+    def _show_user_management(self) -> None:
+        self._body.setCurrentWidget(self._user_management_page)
+
+    def _on_body_page_changed(self) -> None:
+        current = self._body.currentWidget()
+        self._dashboard_nav.setChecked(current is self._dashboard_page)
+        if current is self._user_management_page:
+            self._user_management_page.reload()
+
+    def _open_account_menu(self) -> None:
+        menu = QMenu(objectName="accountMenu", parent=self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        menu.addAction("Settings", self._show_settings)
+        menu.addAction("Log out", self.logout_requested.emit)
+        position = self._account_button.mapToGlobal(
+            QPoint(0, self._account_button.height())
+        )
+        menu.exec(position)
+
     def _show_settings(self) -> None:
         self._body.setCurrentWidget(self._settings_page)
-
-    @staticmethod
-    def _placeholder_page(text: str) -> QWidget:
-        label = QLabel(text, alignment=Qt.AlignmentFlag.AlignCenter, objectName="pageTitle")
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(label)
-        return page
