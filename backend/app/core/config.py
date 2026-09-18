@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     bcrypt_rounds: int = 12
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     notification_interval_seconds: int = 900
+    crawl_timeout_seconds: int = 600  # CLOSESPIDER_TIMEOUT: hard ceiling per run
+    crawl_max_pages: int = 200  # CLOSESPIDER_PAGECOUNT: page cap per run
 
     @property
     def cors_origins_list(self) -> list[str]:

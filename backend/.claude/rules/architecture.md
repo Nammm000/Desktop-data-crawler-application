@@ -53,7 +53,9 @@ Mapping to response models happens only at the route boundary via
 
 - **Lifespan startup** (`init_mongo`): create `AsyncIOMotorClient(settings.mongodb_uri)`
   (never at import time) → `admin.command("ping")` to fail fast on unreachable host or
-  bad credentials → stash client/db on `app.state` → `ensure_indexes(db)`.
+  bad credentials → stash client/db on `app.state` → `ensure_indexes(db)` →
+  `crawler_service.reset_interrupted_crawls` (flips agents orphaned in `Running` by a
+  restart to `Failed`).
 - **Lifespan shutdown** (`close_mongo`): `client.close()` if present.
 - **Middleware**: only `CORSMiddleware` — `allow_origins=settings.cors_origins_list`,
   `allow_credentials=False` (Bearer headers, not cookies), `allow_methods=["*"]`,
@@ -76,18 +78,24 @@ app/
 │                             # generate_refresh_token, hash_refresh_token
 ├── db/mongo.py               # init_mongo / close_mongo, ensure_indexes, get_db
 ├── models/user.py            # UserRole, UserStatus, USERS_COLLECTION, REFRESH_TOKENS_COLLECTION
-├── models/agent.py           # AgentType, AgentFormat, AGENTS_COLLECTION
+├── models/agent.py           # AgentType, AgentFormat, AgentStatus, AGENTS_COLLECTION
+├── models/data.py            # DATA_COLLECTION
 ├── schemas/auth.py           # SignupRequest, LoginRequest, RefreshTokenRequest,
 │                             # LogoutRequest, ChangePasswordRequest, TokenPair
 ├── schemas/user.py           # UserOut (+ from_doc boundary)
 ├── schemas/agent.py          # AgentOut/AgentCreate/AgentUpdate/AgentList
+├── schemas/data.py           # DataOut (+ from_doc boundary)
 ├── services/user_service.py  # create_user, get_by_email, get_by_id, update_password
 ├── services/token_service.py # issue/rotate/revoke refresh tokens, reuse detection
 ├── services/agent_service.py # agent CRUD, _validate_script (json format check)
+├── services/crawler_service.py    # AgentScriptSpider, start_agent_crawl/execute_crawl,
+│                             # run-script validation, startup Running sweep
+├── services/data_service.py  # build_data_docs + insert_many (crawl results)
+├── services/connection_manager.py # shared WS registry (manager.broadcast)
 └── api/
     ├── deps.py               # bearer_scheme, DbDep, WsDbDep, CurrentUser, AdminUser (admin guard)
     └── routes/               # auth.py (5 endpoints), users.py (GET /users/me + 5 admin endpoints),
-│                             # agents.py (5 agent endpoints, CurrentUser), notifications.py (1 WS endpoint)
+│                             # agents.py (6 agent endpoints, CurrentUser), notifications.py (1 WS endpoint)
 ```
 
 ## Token architecture
@@ -230,6 +238,41 @@ Role changes (`PATCH /users/{userId}/role`) follow the same shape minus the
 revocation step — `get_current_user` re-reads the DB doc, so a demotion costs the
 target their privileges on their very next request despite the stale JWT `role`
 claim.
+
+## Sequence: run agent crawl
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R as GET /agents/{id}/run
+    participant S as crawler_service
+    participant WS as connection_manager
+    participant SC as Scrapy (AsyncCrawlerRunner)
+    participant DB as MongoDB
+
+    C->>R: Bearer token
+    R->>S: start_agent_crawl(db, agentId, email)
+    S->>S: _parse_run_script (400 unless json + links + xpath fields)
+    S->>DB: find_one_and_update({status != Running} → Running)
+    alt claim lost
+        R-->>C: 409 (already running) / 404 (deleted)
+    else claimed
+        S->>WS: broadcast agentStatus Running
+        S->>S: asyncio.create_task(execute_crawl)
+        R-->>C: 202 AgentOut (Running)
+        Note over SC: in-process, pure asyncio<br/>(TWISTED_REACTOR_ENABLED=False)
+        SC->>SC: GET each link; per field try XPaths in order
+        SC-->>S: results [{url, fields}]
+        S->>DB: data.insert_many (skipped when 0 items)
+        S->>DB: status → Completed (or Failed on crash)
+        S->>WS: broadcast agentStatus Completed + count + data
+    end
+```
+
+In-flight tasks live in `crawler_service._running_crawls` (strong refs +
+second re-run guard); the task's `finally` always deregisters. A server restart
+kills the crawl — the lifespan startup sweep flips orphaned `Running` agents to
+`Failed` so they can be re-run.
 
 ## Dependency injection (`app/api/deps.py`, `app/core/config.py`)
 

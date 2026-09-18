@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from pymongo import ASCENDING, IndexModel
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
 from app.core.config import get_settings
 from app.models.agent import AGENTS_COLLECTION
+from app.models.data import DATA_COLLECTION
 from app.models.user import REFRESH_TOKENS_COLLECTION, USERS_COLLECTION
 
 
@@ -45,6 +46,16 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db[AGENTS_COLLECTION].create_indexes(
         [
             IndexModel([("name", ASCENDING)], unique=True, name="uq_name"),
+        ]
+    )
+    await db[DATA_COLLECTION].create_indexes(
+        [
+            # Newest-first data per agent; the {agentId} prefix also serves
+            # plain equality lookups.
+            IndexModel(
+                [("agentId", ASCENDING), ("crawledAt", DESCENDING)],
+                name="idx_agent_crawled",
+            ),
         ]
     )
 

@@ -9,6 +9,8 @@ rotating refresh tokens.
 - **MongoDB 8.0** — run via Docker, accessed with **Motor** (async driver)
 - **JWT** (PyJWT) — short-lived access tokens + rotating refresh tokens
 - **bcrypt** — password hashing
+- **Scrapy** — web crawler driven by agent scripts (runs in-process on the
+  asyncio loop, no separate worker)
 
 ## Getting Started
 
@@ -72,7 +74,8 @@ All routes are prefixed with `/api/v1`. JSON uses camelCase
 | GET | `/agents/{agentId}` | Bearer | — | `200` `AgentOut` | `401`, `404` |
 | PATCH | `/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200` `AgentOut` | `400` invalid JSON script, `409` dup name, `404`, `422` |
 | DELETE | `/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
-| WS | `/notifications/ws?token=<accessToken>` | query token | — | ack `{"type":"connected"}`, then a `{"type":"notification","message","createdAt"}` frame every `NOTIFICATION_INTERVAL_SECONDS` (default 900) | handshake rejected with close code 1008 (invalid/expired token, inactive user) |
+| GET | `/agents/{agentId}/run` | Bearer | — | `202` `AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` already running, `400` script not runnable |
+| WS | `/notifications/ws?token=<accessToken>` | query token | — | ack `{"type":"connected"}`, then a `{"type":"notification","message","createdAt"}` frame every `NOTIFICATION_INTERVAL_SECONDS` (default 900) plus `{"type":"agentStatus", ...}` frames on agent runs | handshake rejected with close code 1008 (invalid/expired token, inactive user) |
 
 `UserOut`: `{id, username, email, role, status, createdAt}` — `passwordHash` is
 never exposed. `role` is `admin` or `user`; `status` is a plain string
@@ -86,7 +89,9 @@ the target's next request (role is re-read from the DB, not the JWT). Admins get
 
 `AgentOut`: `{id, name, type, status, format, script, createdAt, updatedAt, updatedBy}` —
 agents are crawler definitions available to every authenticated user. `type` defaults
-to `one_post`; `status` defaults to `New`; `format` is `json`, `xml`, or `md` and
+to `one_post`; `status` is `New`, `Running`, `Completed`, or `Failed` (default `New`;
+`Running`/`Completed`/`Failed` are managed by the run endpoint); `format` is
+`json`, `xml`, or `md` and
 describes how `script` (the raw text content of the file) should be parsed. When
 `format` is `json`, the script must be valid JSON (`400` otherwise — checked on
 create and on update, where old and new values are validated together, so switching
@@ -152,6 +157,13 @@ async def main():
         print(await ws.recv())  # {\"type\": \"connected\"}
         print(await ws.recv())  # first notification
 asyncio.run(main())"
+
+# Run an agent: 202 + status Running, then agentStatus frames on the WS above
+# (Running immediately; Completed/Failed with the crawled data when finished).
+# A runnable script is a JSON object: "links" = list of URLs to crawl, every
+# other key = field name mapped to one XPath or a list of fallback XPaths
+# (tried in order until one matches; element matches yield their text).
+curl -s $BASE/agents/<agentId>/run -H "Authorization: Bearer <accessToken>"
 ```
 
 ## Project Structure
@@ -163,14 +175,18 @@ app/
 ├── core/security.py         # bcrypt hashing, JWT create/decode, refresh token primitives
 ├── db/mongo.py              # Motor client lifecycle, index bootstrap, get_db dependency
 ├── models/user.py           # UserRole enum, UserStatus constants, collection names
-├── models/agent.py          # AgentType/AgentFormat constants, AGENTS_COLLECTION
+├── models/agent.py          # AgentType/AgentFormat/AgentStatus constants, AGENTS_COLLECTION
+├── models/data.py           # DATA_COLLECTION
 ├── schemas/                 # Pydantic request/response models (camelCase aliases)
 ├── services/user_service.py # User CRUD + duplicate detection
 ├── services/token_service.py# Refresh token issue/rotate/revoke + reuse detection
 ├── services/agent_service.py# Agent CRUD + script JSON validation
+├── services/crawler_service.py  # Scrapy spider + run orchestration (status flips, WS broadcast)
+├── services/data_service.py # data collection persistence for crawl results
+├── services/connection_manager.py # shared WS registry for backend broadcasts
 └── api/
     ├── deps.py              # get_current_user / get_current_admin dependencies
-    └── routes/              # auth.py, users.py, agents.py (5 agent endpoints), notifications.py (1 WS endpoint)
+    └── routes/              # auth.py, users.py, agents.py (6 agent endpoints), notifications.py (1 WS endpoint)
 ```
 
 ## MongoDB
@@ -192,8 +208,12 @@ Collections:
 - `refresh_tokens` — `{_id, tokenHash (sha256), userId, createdAt, expiresAt, revokedAt, replacedBy}`
   with a unique index on `tokenHash`, a `userId` index for revocations, and a TTL
   index that deletes documents once `expiresAt` passes.
-- `agents` — `{_id, name, type, format, script, createdAt, updatedAt}` with a
-  unique index on `name`.
+- `agents` — `{_id, name, type, status, format, script, createdAt, updatedAt, updatedBy}`
+  with a unique index on `name`.
+- `data` — one document per crawled page:
+  `{_id, agentId, agentName, url, fields: {field: value | null}, crawledAt}` with a
+  compound `{agentId, crawledAt}` index. Written only by agent runs; unmatched
+  fields are `null`, never missing.
 
 ## Notes
 
@@ -210,6 +230,8 @@ Collections:
 
 - Rate limiting on `/auth/login`
 - Tests (pytest + httpx against a test Mongo)
+- `GET /data?agentId=` listing endpoint for crawl results (they currently reach
+  the frontend via the WebSocket `agentStatus` Completed frame and live in Mongo)
 - First-registered-user-becomes-admin bootstrap (or an admin CLI command)
 - Last-admin protection (self-guard exists, but two admins can still demote each other)
 - Email verification / password reset flows

@@ -26,7 +26,8 @@ paths:
 | GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` |
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
-| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` every `NOTIFICATION_INTERVAL_SECONDS` (def 900) | handshake rejection (close 1008 → HTTP 403) |
+| GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, > `CRAWL_MAX_PAGES` links) |
+| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` every `NOTIFICATION_INTERVAL_SECONDS` (def 900) plus `{"type":"agentStatus",...}` frames on agent runs | handshake rejection (close 1008 → HTTP 403) |
 
 When adding/removing/changing an endpoint, update this table and the README.
 
@@ -55,6 +56,23 @@ When adding/removing/changing an endpoint, update this table and the README.
   Agent names are unique (`409` on create and on rename). `updatedBy` is
   server-derived from the authenticated user (creator on create, patcher on
   update) — never accepted from the request body.
+- `GET /agents/{agentId}/run` (`crawler_service.start_agent_crawl`) runs the
+  agent's script as a background Scrapy crawl: run-time script validation
+  (`_parse_run_script`) → atomic Running claim (`find_one_and_update` with
+  `status != Running` — the refresh-rotation idiom; race loser gets `409`) →
+  broadcast a `Running` frame → `asyncio.create_task(execute_crawl)`. The task
+  registry `_running_crawls` double-guards re-runs (PATCH-proof). On finish:
+  one `data` doc per crawled page, status `Completed` (or `Failed` on crash),
+  and a broadcast frame. A GET with side effects by explicit user request —
+  safe from prefetchers because it requires Bearer auth. Startup sweep
+  (`reset_interrupted_crawls`) flips restart-orphaned `Running` agents to
+  `Failed`. Quirk: PATCHing an agent's status *to* `Running` without a crawl
+  soft-locks runs (`409`) until it is patched back.
+- WS broadcast frames are flat camelCase dicts via the shared
+  `connection_manager.manager` (registered by the notifications route):
+  Running `{"type":"agentStatus","agentId","agentName","status":"Running","createdAt"}`;
+  Completed adds `"count"` and `"data"` (DataOut-shaped); Failed adds
+  `"message"`. Broadcasts reach every connected client.
 - WebSocket routes (`app/api/routes/notifications.py`): the access token rides
   in the `token` query param (QWebSocket cannot set handshake headers) and is
   validated at the handshake by `_handshake_user` (decode → `type == "access"`

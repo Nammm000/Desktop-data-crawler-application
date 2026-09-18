@@ -1,5 +1,6 @@
-"""Temporary notification stream: pushes a fixed message to each connected
-client on a timer (default 15 min) over an authenticated WebSocket."""
+"""Authenticated notification stream: pushes a fixed message to each
+connected client on a timer (default 15 min) and relays backend broadcasts
+(agent crawl status) sent through the shared connection manager."""
 
 import asyncio
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from app.core.config import SettingsDep
 from app.core.security import decode_access_token
 from app.models.user import UserStatus
 from app.services import user_service
+from app.services.connection_manager import manager
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -49,6 +51,7 @@ async def notification_stream(
         return
     await websocket.accept()
     await websocket.send_json({"type": "connected"})
+    manager.connect(websocket)
     try:
         while True:
             await asyncio.sleep(settings.notification_interval_seconds)
@@ -62,3 +65,5 @@ async def notification_stream(
     except (WebSocketDisconnect, RuntimeError):
         # Client went away; a send on a dead socket also lands here.
         return
+    finally:
+        manager.disconnect(websocket)

@@ -6,11 +6,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import agents, auth, notifications, users
 from app.core.config import get_settings
 from app.db.mongo import close_mongo, init_mongo
+from app.services import crawler_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_mongo(app)
+    # A restart kills in-flight crawls; unstick agents left in "Running".
+    await crawler_service.reset_interrupted_crawls(app.state.mongo_db)
     yield
     await close_mongo(app)
 

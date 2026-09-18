@@ -44,8 +44,15 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
   immediately), role changes, account deletion (single + bulk, cascades refresh tokens)
 - Agent CRUD (any authenticated user): crawler definitions with a raw json/xml/md
   script, unique names, JSON scripts validated on create and on the merged update view
-- Notification WebSocket (any active user, temporary): auth-at-handshake stream that
-  pushes a placeholder message ("15 minutes have passed") on a timer
+- Agent runs (`GET /agents/{agentId}/run`): executes the script as a background
+  Scrapy crawl (in-process, pure asyncio), atomically flips status
+  New → Running → Completed/Failed, persists one `data` doc per crawled page,
+  and broadcasts status frames (Completed carries the crawled data) to all
+  connected WebSocket clients
+- Notification WebSocket (any active user): auth-at-handshake stream that
+  pushes a placeholder message ("15 minutes have passed") on a timer and
+  relays backend broadcasts (agent crawl status) via the shared connection
+  manager
 - Health check with database status
 
 ## API surface
@@ -71,7 +78,8 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 | GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` "Agent not found" |
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
-| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` per interval | handshake rejection (close 1008 → HTTP 403) |
+| GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl runs in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, too many links) |
+| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` per interval plus `{"type":"agentStatus","agentId","agentName","status","createdAt"[,"count","data"|"message"]}` frames on agent runs (broadcast to all clients) | handshake rejection (close 1008 → HTTP 403) |
 | GET | `/api/health` | — | — | `200 {"status":"ok","database":"up"\|"down"}` | — |
 
 ### Response shapes
@@ -142,7 +150,10 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 | `userIds` (bulk delete) | list of ids, at least 1 |
 
 Agent constraints (`app/schemas/agent.py`): `name` 1–100 chars, whitespace-stripped,
-unique (`409`); `type` `one_post` only (default); `status` `New` only (default);
+unique (`409`); `type` `one_post` only (default); `status` one of
+`New` (default) / `Running` / `Completed` / `Failed` (the last three are driven by
+the run endpoint; PATCHing status **to** `Running` without a crawl soft-locks runs
+with `409` until patched back);
 `format` `json`/`xml`/`md`; `script` 1–1M chars and must parse via `json.loads` when
 `format` is `json` (`400`, validated in `agent_service._validate_script` — also on
 the merged PATCH view). `updatedBy` is server-derived from the authenticated user
@@ -162,6 +173,8 @@ Query params for `GET /agents` mirror `GET /users`.
 | `BCRYPT_ROUNDS` | `12` | bcrypt cost factor |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | comma-separated allowed origins (frontend dev servers) |
 | `NOTIFICATION_INTERVAL_SECONDS` | `900` | notification push interval over the WS stream (tests shorten it) |
+| `CRAWL_TIMEOUT_SECONDS` | `600` | hard ceiling per agent crawl run (Scrapy `CLOSESPIDER_TIMEOUT`) |
+| `CRAWL_MAX_PAGES` | `200` | page cap per crawl run (Scrapy `CLOSESPIDER_PAGECOUNT`; more links than this is a `400`) |
 
 ## Getting started
 
@@ -182,13 +195,16 @@ backend/
 │   ├── main.py                   # FastAPI app: lifespan, CORS, routers, /api/health
 │   ├── api/
 │   │   ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser
-│   │   └── routes/               # auth.py, users.py, agents.py (5 endpoints, CurrentUser), notifications.py (1 WS endpoint)
+│   │   └── routes/               # auth.py, users.py, agents.py (6 endpoints, CurrentUser), notifications.py (1 WS endpoint)
 │   ├── core/                     # config.py (settings), security.py (bcrypt/JWT/token utils)
 │   ├── db/mongo.py               # Motor lifecycle, ensure_indexes(), get_db
 │   ├── models/user.py            # UserRole, UserStatus, collection-name constants
-│   ├── models/agent.py           # AgentType, AgentFormat, AGENTS_COLLECTION
+│   ├── models/agent.py           # AgentType, AgentFormat, AgentStatus, AGENTS_COLLECTION
+│   ├── models/data.py            # DATA_COLLECTION
 │   ├── schemas/                  # Pydantic request/response models (camelCase aliases)
-│   └── services/                 # user_service.py, token_service.py, agent_service.py
+│   └── services/                 # user_service.py, token_service.py, agent_service.py,
+│       │                         # crawler_service.py (Scrapy run orchestration),
+│       │                         # data_service.py (crawl results), connection_manager.py (WS registry)
 ├── .claude/rules/                # convention + reference docs (this file)
 ├── docker-compose.yml            # MongoDB 8.0 only (no API service)
 ├── requirements.txt              # pinned deps
@@ -201,6 +217,14 @@ backend/
   `user_service.create_user` (`app/services/user_service.py`); no admin bootstrap yet.
 - No rate limiting (login/refresh endpoints are unprotected).
 - No test suite.
+- `GET /agents/{agentId}/run` is a GET with side effects (explicit user choice);
+  Bearer auth keeps prefetchers from triggering crawls.
+- Crawl results have no read API yet — they reach the frontend via the WS
+  Completed frame and live in the `data` collection (`GET /data?agentId=` is
+  future work).
+- A server restart (including `uvicorn --reload`) kills in-flight crawls; the
+  startup sweep flips orphaned `Running` agents to `Failed`. Run without
+  `--reload` when testing long crawls.
 - No email verification or password reset.
 - No last-admin protection: the self-guard only blocks self-targeting — two admins
   can still ban/demote each other. Un-banning does not restore revoked sessions

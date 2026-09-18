@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import CurrentUser, DbDep
 from app.schemas.agent import AgentCreate, AgentList, AgentOut, AgentUpdate
-from app.services import agent_service
+from app.services import agent_service, crawler_service
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -45,6 +45,15 @@ async def update_agent(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
         )
+    return AgentOut.from_doc(doc)
+
+
+@router.get("/{agent_id}/run", response_model=AgentOut, status_code=status.HTTP_202_ACCEPTED)
+async def run_agent(agent_id: str, user: CurrentUser, db: DbDep) -> AgentOut:
+    """Launch the agent's crawl in the background. Returns the agent already
+    in "Running" state; the outcome (Completed/Failed + crawled data) is
+    pushed over the notifications WebSocket."""
+    doc = await crawler_service.start_agent_crawl(db, agent_id, user["email"])
     return AgentOut.from_doc(doc)
 
 

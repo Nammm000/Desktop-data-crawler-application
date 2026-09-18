@@ -16,6 +16,9 @@ class AgentStatus:
     """The agent `status` field is a plain string (per the users convention)."""
 
     NEW = "New"
+    RUNNING = "Running"
+    COMPLETED = "Completed"
+    FAILED = "Failed"  # crawl crashed / interrupted by a server restart
 
 
 AGENTS_COLLECTION = "agents"

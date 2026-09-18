@@ -15,7 +15,9 @@ class _CamelModel(BaseModel):
 # values cannot drift (same idiom as UserStatusValue).
 AgentTypeValue = Literal[AgentType.ONE_POST]
 AgentFormatValue = Literal[AgentFormat.JSON, AgentFormat.XML, AgentFormat.MD]
-AgentStatusValue = Literal[AgentStatus.NEW]
+AgentStatusValue = Literal[
+    AgentStatus.NEW, AgentStatus.RUNNING, AgentStatus.COMPLETED, AgentStatus.FAILED
+]
 
 # Agent names are display labels (not login identifiers): generous length,
 # no character pattern. Scripts are capped at 1M chars — safely under the
