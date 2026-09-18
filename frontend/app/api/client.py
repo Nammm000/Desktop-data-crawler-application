@@ -72,6 +72,22 @@ class AgentPage:
 
 
 @dataclass(frozen=True)
+class AgentData:
+    id: str
+    agent_id: str
+    agent_name: str
+    url: str
+    fields: dict[str, str | None]  # XPath name -> extracted value; None = no match
+    crawled_at: datetime | None
+
+
+@dataclass(frozen=True)
+class AgentDataPage:
+    data: tuple[AgentData, ...]
+    total: int
+
+
+@dataclass(frozen=True)
 class Notification:
     message: str
     created_at: datetime | None
@@ -131,6 +147,27 @@ def _parse_agent(data: dict) -> Agent:
 def _parse_agent_page(data: dict) -> AgentPage:
     return AgentPage(
         agents=tuple(_parse_agent(a) for a in data["agents"]),
+        total=int(data["total"]),
+    )
+
+
+def _parse_agent_data(data: dict) -> AgentData:
+    fields = data.get("fields") or {}
+    if not isinstance(fields, dict):
+        raise TypeError("fields must be an object")
+    return AgentData(
+        id=data["id"],
+        agent_id=data["agentId"],
+        agent_name=data.get("agentName", ""),
+        url=data["url"],
+        fields={str(k): (None if v is None else str(v)) for k, v in fields.items()},
+        crawled_at=_parse_timestamp(data.get("crawledAt")),
+    )
+
+
+def _parse_agent_data_page(data: dict) -> AgentDataPage:
+    return AgentDataPage(
+        data=tuple(_parse_agent_data(d) for d in data["data"]),
         total=int(data["total"]),
     )
 
@@ -384,3 +421,36 @@ class ApiClient:
     def delete_agent(self, *, access_token: str, agent_id: str) -> None:
         # 204 with an empty body: _request returns None, nothing to parse.
         self._request("DELETE", f"/api/v1/agents/{agent_id}", bearer=access_token)
+
+    def run_agent(self, *, access_token: str, agent_id: str) -> Agent:
+        # GET with side effects (backend contract): 202, body = the updated
+        # AgentOut already flipped to "Running"; the crawl finishes in the
+        # background and its rows land in the data collection.
+        payload = self._request(
+            "GET", f"/api/v1/agents/{agent_id}/run", bearer=access_token
+        )
+        return _parse_or_fail(payload, _parse_agent)
+
+    def list_agent_data(
+        self, *, access_token: str, agent_id: str, limit: int = 50, skip: int = 0
+    ) -> AgentDataPage:
+        payload = self._request(
+            "GET",
+            f"/api/v1/agents/{agent_id}/data",
+            params={"limit": limit, "skip": skip},
+            bearer=access_token,
+        )
+        return _parse_or_fail(payload, _parse_agent_data_page)
+
+    def delete_data(self, *, access_token: str, data_id: str) -> None:
+        # 204 with an empty body: _request returns None, nothing to parse.
+        self._request("DELETE", f"/api/v1/data/{data_id}", bearer=access_token)
+
+    def delete_data_items(self, *, access_token: str, data_ids: list[str]) -> int:
+        payload = self._request(
+            "DELETE",
+            "/api/v1/data",
+            json_body={"ids": list(data_ids)},
+            bearer=access_token,
+        )
+        return _parse_or_fail(payload, _parse_deleted_count)

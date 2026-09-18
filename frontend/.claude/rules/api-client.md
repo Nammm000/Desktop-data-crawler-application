@@ -25,6 +25,10 @@ globs: ["app/api/**"]
 | `create_agent()` | `POST /api/v1/agents` | Bearer | `{name, format, script}` | `201 Agent` | `409` dup name, `400` invalid JSON script, `422` |
 | `update_agent()` | `PATCH /api/v1/agents/{id}` | Bearer | `{name?, format?, script?}` (partial) | `Agent` | `409` dup name, `400` JSON check on merged script, `404`, `422` |
 | `delete_agent()` | `DELETE /api/v1/agents/{id}` | Bearer | — | `None` (204, empty body) | `404` |
+| `run_agent()` | `GET /api/v1/agents/{id}/run` | Bearer | — | `202 Agent` (status `Running`) | `404`, `409` already running, `400` script not runnable |
+| `list_agent_data()` | `GET /api/v1/agents/{id}/data?limit&skip` | Bearer | — | `AgentDataPage(data, total)` | `404` agent gone, `422` bad params |
+| `delete_data()` | `DELETE /api/v1/data/{id}` | Bearer | — | `None` (204, empty body) | `404` |
+| `delete_data_items()` | `DELETE /api/v1/data` | Bearer | `{"ids": [...]}` (min 1) | `int` (deleted count) | `422` |
 | `websocket_url(token)` | `WS /api/v1/notifications/ws?token=` | access token in query | — | `ws://`/`wss://` URL string | handshake rejection (close 1008) |
 
 ## Conventions
@@ -47,6 +51,19 @@ globs: ["app/api/**"]
   `get_agent` single fetch — the list plus row data cover the UI.
   `create_agent` / `update_agent` strip `name` before sending (mirrors
   `signup`); `delete_agent` is 204-never-parsed like `delete_user`.
+- `run_agent` is a GET with side effects (accepted backend quirk): 202 with
+  the updated `Agent` already flipped to `Running`; the crawl finishes in the
+  background. Errors surface the backend detail verbatim (409 "Agent is
+  already running"; 400 when the script is not a JSON object with a non-empty
+  `links` list of URL strings). The camelCase `DataOut` (`agentId`,
+  `agentName`, `url`, `fields` mapping XPath name → value/`null`,
+  `crawledAt`) parses into `AgentData` / `AgentDataPage`; the data list sorts
+  newest-first server-side. `delete_data_items` sends `{"ids": [...]}` —
+  unknown ids simply don't count — and reuses the deleted-count parse;
+  `delete_data` is 204-never-parsed. Data docs survive agent deletion, but
+  `list_agent_data` 404s once the agent is gone (the UI clears its data
+  section on that 404). The backend also exposes `GET /api/v1/agents/{id}`;
+  it stays unwrapped — the list plus row data covers the UI.
 - Every request goes through the shared `requests.Session` with the standard
   timeout (10 s) so busy states on buttons can never wedge.
 - Base URL resolution: constructor arg → `DATA_CRAWLER_API_URL` → `http://localhost:8000`.

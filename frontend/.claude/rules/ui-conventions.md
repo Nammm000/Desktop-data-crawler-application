@@ -50,16 +50,46 @@ globs: ["app/ui/**", "app/resources/**"]
   `Page X of Y`; changing the limit resets to page 1; one role/status change
   in flight at a time, reverting the combo if the server refuses.
 - AgentManagementPage (every authenticated user): `QTableWidget#agentsTable`
-  with 8 columns — Name (the Stretch column), Format, Status, Created,
-  Updated, Updated by, and per-row edit + trash buttons
-  (`QPushButton#rowEditButton` edit.svg / `#rowDeleteButton` trash.svg,
-  28×28). The script is never a column (up to 1,000,000 chars) — the dialog
-  owns it. A toolbar row holds the `primaryButton` "Add agent" (plus.svg);
-  every delete passes `ConfirmDialog.ask(..., danger=True)`; one delete in
-  flight at a time; success → `reload()` (clamps an emptied last page),
-  error → banner + `reload()`. Pagination matches the users page; an accepted
-  create resets to page 1 (newest-first), an accepted edit reloads the
-  current page.
+  with 9 columns — Name (the Stretch column, rendered as an indigo underlined
+  link via item font/foreground — QSS cannot reach items; `cellClicked`
+  filtered to the Name column + `_row_agents` maps the click to the Agent),
+  Format, Status, Created, Updated, Updated by, and per-row run + edit +
+  trash buttons (`QPushButton#rowRunButton` play.svg / `#rowEditButton`
+  edit.svg / `#rowDeleteButton` trash.svg, 28×28). Run needs no confirm
+  dialog: success and failure both `reload()` (the row flips to `Running`);
+  the button disables with an "already running" tooltip while status is
+  `Running`; 409/400/404 land in the banner verbatim. The script is never a
+  column (up to 1,000,000 chars) — the dialog owns it. A toolbar row holds
+  the `primaryButton` "Add agent" (plus.svg); every delete passes
+  `ConfirmDialog.ask(..., danger=True)`; one delete in flight at a time;
+  success → `reload()` (clamps an emptied last page), error → banner +
+  `reload()`; deleting the selected agent clears the data section (the data
+  list endpoint 404s once the agent is gone). Pagination matches the users
+  page; an accepted create resets to page 1 (newest-first), an accepted edit
+  reloads the current page.
+- Agent data section (bottom of AgentManagementPage): `QTableWidget#dataTable`
+  with 5 columns — checkbox, URL (Stretch, full URL in the tooltip), Fields
+  (single-line `json.dumps` elided by the table; a non-empty cell is an
+  indigo underlined link via item font/foreground — QSS cannot reach items —
+  whose `cellClicked`, hard-filtered to the Fields column, opens the
+  read-only `AgentDataDialog` via `self._data_rows[row]` (the AgentData
+  object list that also feeds bulk deletes); "—" when empty, plain and
+  inert), Crawled, and a per-row trash button. Hidden inside `_data_body`
+  until an agent is selected; before that a `#sectionTitle` "Agent data" +
+  `#pageSubtitle` empty-state caption show. A `#pageButton` Hide/Show
+  (`_data_toggle_button`) sits right of the section title, visible only
+  while an agent is selected: it collapses/expands `_data_body`
+  (`_data_collapsed`); a name click always re-expands, and
+  `_clear_data_section` resets the flag and hides the button. Own
+  banner/progress/bulk bar (`#selectAllCheckBox` + `#dangerButton` "Delete
+  selected (N)")/pagination, and busy flags (`_data_loading`,
+  `_pending_data_delete`) deliberately independent of the agents flags so
+  one section never freezes the other; every data delete passes
+  `ConfirmDialog.ask(..., danger=True)`; success → `_reload_data()` (clamps
+  an emptied last page), error → banner + `_reload_data()`. A data-list 404
+  (agent deleted elsewhere) clears the section with "The selected agent no
+  longer exists."; `reload()` (page re-entry) refreshes the selected agent's
+  data too; re-clicking the same name refetches page 1.
 - AgentDialog (modal, `#agentDialog`, fixed width 560, height refits via
   `adjustSize()`): Name `QLineEdit` (max 100), Format
   `chosen_combo("formatCombo")` (JSON/XML/Markdown → json/xml/md), and a
@@ -88,6 +118,17 @@ globs: ["app/ui/**", "app/resources/**"]
   empty/unparseable → empty rows); switching out is a no-op (the editor
   already holds the script). It closes immediately on success (the reloaded
   table row is the feedback).
+- AgentDataDialog (modal, `#agentDataDialog`, fixed width 560): read-only
+  viewer for one crawled record, opened by a Fields-cell click —
+  `QLabel#cardTitle` "Agent data", the record's URL as the `#cardSubtitle`,
+  `#fieldCaption`-over-value rows for Crawled (`format_date`) and Fields,
+  then a fixed-300px read-only `QPlainTextEdit#fieldsView` (the script
+  editor's code surface; readOnly stays enabled so text stays selectable)
+  holding `json.dumps(fields, ensure_ascii=False, indent=2)`, placeholder
+  "No fields were extracted from this page" when empty. Single right-aligned
+  "Close" (plain secondary, `setDefault(True)`) wired to `reject()`. Fixed
+  slot, never `adjustSize` — a read-only editor's sizeHint grows with the
+  document. Purely local; no network.
 
 ## Inputs & validation
 

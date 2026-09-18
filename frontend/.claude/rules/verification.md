@@ -86,6 +86,36 @@ Checklist before finishing any change (covers every endpoint):
   page clamps the page index; delete while the backend is down → banner +
   resync; deleting an already-removed agent (second user/curl) → "Agent not
   found" banner + resync
+- Agent run: per-row play button (no confirm) → the row flips to Running and
+  the button disables ("already running" tooltip); a curl run while the app
+  still shows New → 409 banner + resync; agent whose script is not a JSON
+  object with `links` (e.g. `{"nope":1}` or an md script) → 400 detail
+  banner; agent deleted via curl → "Agent not found" + resync; Completed /
+  Failed statuses appear on page re-entry (no live updates by design)
+- Agent data section: clicking an agent name (indigo underlined) → the
+  section appears with `Data from <name> · N records`; URL / Fields
+  (single-line JSON, `null` for unmatched XPaths, "—" when empty) /
+  Crawled columns; a different name → its page 1; the same name again →
+  refetch; re-entering the page refreshes the data; limit selector resets to
+  page 1, Previous/Next respect bounds, `Page X of Y` matches `total`
+- Agent data Fields viewer: non-empty Fields cells are indigo underlined
+  links; clicking opens the read-only modal (URL subtitle, Crawled date,
+  pretty monospace JSON); Close and Esc dismiss; the text is
+  selectable/copyable but not editable; "—" cells are plain and do nothing
+  on click; a fetch/delete in flight disables the table (no mid-flight click)
+- Agent data Hide/Show: the Hide button right of the "Agent data" title
+  (only present with a selection) collapses bulk bar + table + pagination
+  while the title/subtitle/banner/progress stay; Show restores it; clicking
+  an agent name while collapsed re-expands (button reads "Hide"); the
+  data-list 404 / deleting the selected agent / logout reset the section,
+  hide the button, and clear the collapse state
+- Agent data deletes: per-row trash → confirm card; Cancel keeps the row;
+  checkboxes drive `Delete selected (N)`; Select all syncs; deleting every
+  row of the last page clamps the page index; backend down → banner + resync;
+  agent deleted via curl then a data pagination click → section clears with
+  "The selected agent no longer exists."; deleting the selected agent in the
+  table clears the section; the two sections stay independently interactive
+  (one loading never freezes the other); logout clears selection + section
 - Notifications (temporary 15-min push; shorten with
   `NOTIFICATION_INTERVAL_SECONDS=3` on uvicorn): bell button left of the
   email button, no unread tint at login; a push flips the bell to the indigo

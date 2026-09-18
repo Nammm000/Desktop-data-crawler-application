@@ -15,6 +15,8 @@ from PySide6.QtCore import QObject, QSettings, Signal
 
 from app.api.client import (
     Agent,
+    AgentData,
+    AgentDataPage,
     AgentPage,
     ApiClient,
     ApiError,
@@ -337,6 +339,68 @@ class SessionController(QObject):
             )
 
         run_async(work, on_success or (lambda _none: None), on_error or (lambda _exc: None))
+
+    def run_agent(
+        self,
+        agent_id: str,
+        on_success: Callable[[Agent], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> Agent:
+            return self._authorized_call(
+                lambda token: self._client.run_agent(
+                    access_token=token, agent_id=agent_id
+                )
+            )
+
+        run_async(work, on_success or (lambda _agent: None), on_error or (lambda _exc: None))
+
+    def list_agent_data(
+        self,
+        agent_id: str,
+        limit: int,
+        skip: int,
+        on_success: Callable[[AgentDataPage], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> AgentDataPage:
+            return self._authorized_call(
+                lambda token: self._client.list_agent_data(
+                    access_token=token, agent_id=agent_id, limit=limit, skip=skip
+                )
+            )
+
+        run_async(work, on_success or (lambda _page: None), on_error or (lambda _exc: None))
+
+    def delete_data(
+        self,
+        data_id: str,
+        on_success: Callable[[None], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> None:
+            return self._authorized_call(
+                lambda token: self._client.delete_data(
+                    access_token=token, data_id=data_id
+                )
+            )
+
+        run_async(work, on_success or (lambda _none: None), on_error or (lambda _exc: None))
+
+    def delete_data_items(
+        self,
+        data_ids: list[str],
+        on_success: Callable[[int], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> int:
+            return self._authorized_call(
+                lambda token: self._client.delete_data_items(
+                    access_token=token, data_ids=data_ids
+                )
+            )
+
+        run_async(work, on_success or (lambda _count: None), on_error or (lambda _exc: None))
 
     # -- notification stream ---------------------------------------------------
 

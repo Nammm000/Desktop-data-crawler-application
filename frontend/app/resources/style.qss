@@ -155,7 +155,8 @@ QFrame#dialogCard {
 
 QDialog#changePasswordDialog,
 QDialog#confirmDialog,
-QDialog#agentDialog {
+QDialog#agentDialog,
+QDialog#agentDataDialog {
     background-color: #F5F6FA;
 }
 
@@ -215,10 +216,11 @@ QMenu#notificationMenu::item:disabled {
     color: #4B5563;  /* entries are informational text, not grayed-out actions */
 }
 
-/* --- Management tables (users, agents) --------------------------------------- */
+/* --- Management tables (users, agents, data) ---------------------------------- */
 
 QTableWidget#usersTable,
-QTableWidget#agentsTable {
+QTableWidget#agentsTable,
+QTableWidget#dataTable {
     background-color: #FFFFFF;
     border: 1px solid #E2E4EA;
     border-radius: 12px;
@@ -226,7 +228,8 @@ QTableWidget#agentsTable {
     alternate-background-color: #FAFAFC;
 }
 QHeaderView#usersTableHeader::section,
-QHeaderView#agentsTableHeader::section {
+QHeaderView#agentsTableHeader::section,
+QHeaderView#dataTableHeader::section {
     background-color: #F9FAFC;
     border: none;
     border-bottom: 1px solid #E2E4EA;
@@ -386,6 +389,24 @@ QPushButton#rowEditButton:pressed {
     background-color: #E9EBF0;
 }
 
+QPushButton#rowRunButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+}
+QPushButton#rowRunButton:hover {
+    background-color: #EEF2FF;
+    border-color: #E0E7FF;
+}
+QPushButton#rowRunButton:pressed {
+    background-color: #E0E7FF;
+}
+
 /* Dialog-form metrics (sits between 36px QLineEdit fields, so it must not
    use the 28px table-combo metrics above). */
 QComboBox#formatCombo {
@@ -441,6 +462,23 @@ QPlainTextEdit#scriptEdit:focus {
 QPlainTextEdit#scriptEdit:disabled {
     background-color: #F3F4F6;
     color: #9CA3AF;
+}
+
+/* Read-only fields viewer (AgentDataDialog): the script editor's code
+   surface on a fixed modal slot (height set in code). No :disabled rule —
+   readOnly stays enabled so the text stays selectable/copyable. */
+QPlainTextEdit#fieldsView {
+    background-color: #F3F4F6;
+    color: #000000;
+    border: 1px solid #E2E4EA;
+    border-radius: 8px;
+    min-height: 120px;
+    padding: 8px 12px;
+    font-family: "SF Mono", "Cascadia Mono", "Menlo", "Consolas", monospace;
+    font-size: 12px;
+}
+QPlainTextEdit#fieldsView:focus {
+    border: 1px solid #4F46E5;
 }
 
 /* JSON key-value rows (AgentDialog json mode). Buttons are fixed 24px: the
@@ -513,6 +551,11 @@ QLabel#pageSubtitle {
 }
 QLabel#pageIndicator {
     color: #6B7280;
+}
+QLabel#sectionTitle {
+    font-size: 16px;
+    font-weight: 700;
+    color: #374151;
 }
 QLabel#profileValue {
     font-weight: 500;
