@@ -75,6 +75,9 @@ All routes are prefixed with `/api/v1`. JSON uses camelCase
 | PATCH | `/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200` `AgentOut` | `400` invalid JSON script, `409` dup name, `404`, `422` |
 | DELETE | `/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
 | GET | `/agents/{agentId}/run` | Bearer | — | `202` `AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` already running, `400` script not runnable |
+| GET | `/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `DataList` `{data, total}` (newest first) | `401`, `404` |
+| DELETE | `/data` | Bearer | `{ids}` (list, ≥1) | `200` `{"deleted": n}` | `401`, `422` |
+| DELETE | `/data/{dataId}` | Bearer | — | `204` | `401`, `404` |
 | WS | `/notifications/ws?token=<accessToken>` | query token | — | ack `{"type":"connected"}`, then a `{"type":"notification","message","createdAt"}` frame every `NOTIFICATION_INTERVAL_SECONDS` (default 900) plus `{"type":"agentStatus", ...}` frames on agent runs | handshake rejected with close code 1008 (invalid/expired token, inactive user) |
 
 `UserOut`: `{id, username, email, role, status, createdAt}` — `passwordHash` is
@@ -99,6 +102,16 @@ only the format to `json` against a stored non-JSON script is rejected). Names a
 unique (1–100 chars, whitespace-stripped). `updatedBy` records the email of the
 acting user — the creator on create, the patcher on update — and is set by the
 server, never accepted from the request body.
+
+`DataOut`: `{id, agentId, agentName, url, fields, crawledAt}` — one crawled page
+produced by an agent run (`fields` maps each script field to its extracted text or
+`null`; `url` is the post-redirect final URL). `GET /agents/{agentId}/data` lists
+an agent's records newest-first with `?limit=&skip=`, wrapped as
+`DataList` `{data, total}`; an agent with no runs returns an empty list, an unknown
+agent id returns `404`. Crawl results survive agent deletion (no cascade) but become
+unreadable via this endpoint once the agent is gone. Records are deleted with
+`DELETE /data/{dataId}` (single → `204`) or `DELETE /data` + `{ids}` (bulk →
+`{"deleted": n}`; unknown ids don't count) — no agent scoping on deletes.
 
 ### Quick smoke test
 
@@ -164,6 +177,14 @@ asyncio.run(main())"
 # other key = field name mapped to one XPath or a list of fallback XPaths
 # (tried in order until one matches; element matches yield their text).
 curl -s $BASE/agents/<agentId>/run -H "Authorization: Bearer <accessToken>"
+
+# List the crawled data an agent produced (newest first, paginated)
+curl -s "$BASE/agents/<agentId>/data?limit=20&skip=0" -H "Authorization: Bearer <accessToken>"
+
+# Delete data documents: one by id, or many by ids (unknown ids don't count)
+curl -s -X DELETE $BASE/data/<dataId> -H "Authorization: Bearer <accessToken>"
+curl -s -X DELETE $BASE/data -H "Authorization: Bearer <accessToken>" \
+  -H 'Content-Type: application/json' -d '{"ids":["<dataId1>","<dataId2>"]}'
 ```
 
 ## Project Structure
@@ -182,11 +203,11 @@ app/
 ├── services/token_service.py# Refresh token issue/rotate/revoke + reuse detection
 ├── services/agent_service.py# Agent CRUD + script JSON validation
 ├── services/crawler_service.py  # Scrapy spider + run orchestration (status flips, WS broadcast)
-├── services/data_service.py # data collection persistence for crawl results
+├── services/data_service.py # data collection persistence for crawl results + per-agent listing
 ├── services/connection_manager.py # shared WS registry for backend broadcasts
 └── api/
     ├── deps.py              # get_current_user / get_current_admin dependencies
-    └── routes/              # auth.py, users.py, agents.py (6 agent endpoints), notifications.py (1 WS endpoint)
+    └── routes/              # auth.py, users.py, agents.py (7 agent endpoints), data.py (2 data endpoints), notifications.py (1 WS endpoint)
 ```
 
 ## MongoDB
@@ -212,8 +233,8 @@ Collections:
   with a unique index on `name`.
 - `data` — one document per crawled page:
   `{_id, agentId, agentName, url, fields: {field: value | null}, crawledAt}` with a
-  compound `{agentId, crawledAt}` index. Written only by agent runs; unmatched
-  fields are `null`, never missing.
+  compound `{agentId, crawledAt}` index. Written by agent runs and read by
+  `GET /agents/{agentId}/data`; unmatched fields are `null`, never missing.
 
 ## Notes
 
@@ -230,8 +251,6 @@ Collections:
 
 - Rate limiting on `/auth/login`
 - Tests (pytest + httpx against a test Mongo)
-- `GET /data?agentId=` listing endpoint for crawl results (they currently reach
-  the frontend via the WebSocket `agentStatus` Completed frame and live in Mongo)
 - First-registered-user-becomes-admin bootstrap (or an admin CLI command)
 - Last-admin protection (self-guard exists, but two admins can still demote each other)
 - Email verification / password reset flows

@@ -49,6 +49,12 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
   New → Running → Completed/Failed, persists one `data` doc per crawled page,
   and broadcasts status frames (Completed carries the crawled data) to all
   connected WebSocket clients
+- Crawl-result listing (`GET /agents/{agentId}/data`): paginated newest-first
+  read of the `data` collection for one agent (any authenticated user); unknown
+  agent → 404, no runs yet → empty list
+- Data deletes (`DELETE /data/{dataId}` single → 204; `DELETE /data` + `{ids}`
+  bulk → `{deleted: n}`): open to every authenticated user (no ownership model,
+  matching agents); unknown ids in the bulk list simply don't count
 - Notification WebSocket (any active user): auth-at-handshake stream that
   pushes a placeholder message ("15 minutes have passed") on a timer and
   relays backend broadcasts (agent crawl status) via the shared connection
@@ -79,6 +85,9 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
 | GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl runs in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, too many links) |
+| GET | `/api/v1/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first) | `401`, `404` "Agent not found" |
+| DELETE | `/api/v1/data` | Bearer | `{ids}` (list, ≥1) | `200 {deleted: n}` (unknown ids don't count) | `401`, `422` |
+| DELETE | `/api/v1/data/{dataId}` | Bearer | — | `204` | `401`, `404` "Data not found" |
 | WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` per interval plus `{"type":"agentStatus","agentId","agentName","status","createdAt"[,"count","data"|"message"]}` frames on agent runs (broadcast to all clients) | handshake rejection (close 1008 → HTTP 403) |
 | GET | `/api/health` | — | — | `200 {"status":"ok","database":"up"\|"down"}` | — |
 
@@ -135,6 +144,23 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 ```
 
 `AgentList` mirrors `UserList`: `{agents: [AgentOut], total: n}`.
+
+`DataOut` (one crawled page; `fields` values are extracted text or `null` —
+never missing; `url` is the post-redirect final URL):
+
+```json
+{
+  "id": "<uuid string>",
+  "agentId": "<agent _id at run start>",
+  "agentName": "Post Fetcher v2",
+  "url": "https://example.com/post/1",
+  "fields": { "title": "Hello", "body": null },
+  "crawledAt": "2026-01-01T00:00:00Z"
+}
+```
+
+`DataList` mirrors `AgentList`: `{data: [DataOut], total: n}`
+(`GET /agents/{agentId}/data`, newest first).
 
 ### Request validation constraints (`app/schemas/auth.py`)
 
@@ -195,7 +221,7 @@ backend/
 │   ├── main.py                   # FastAPI app: lifespan, CORS, routers, /api/health
 │   ├── api/
 │   │   ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser
-│   │   └── routes/               # auth.py, users.py, agents.py (6 endpoints, CurrentUser), notifications.py (1 WS endpoint)
+│   │   └── routes/               # auth.py, users.py, agents.py (7 endpoints, CurrentUser), data.py (2 endpoints), notifications.py (1 WS endpoint)
 │   ├── core/                     # config.py (settings), security.py (bcrypt/JWT/token utils)
 │   ├── db/mongo.py               # Motor lifecycle, ensure_indexes(), get_db
 │   ├── models/user.py            # UserRole, UserStatus, collection-name constants
@@ -204,7 +230,7 @@ backend/
 │   ├── schemas/                  # Pydantic request/response models (camelCase aliases)
 │   └── services/                 # user_service.py, token_service.py, agent_service.py,
 │       │                         # crawler_service.py (Scrapy run orchestration),
-│       │                         # data_service.py (crawl results), connection_manager.py (WS registry)
+│       │                         # data_service.py (crawl results + listing), connection_manager.py (WS registry)
 ├── .claude/rules/                # convention + reference docs (this file)
 ├── docker-compose.yml            # MongoDB 8.0 only (no API service)
 ├── requirements.txt              # pinned deps
@@ -219,9 +245,8 @@ backend/
 - No test suite.
 - `GET /agents/{agentId}/run` is a GET with side effects (explicit user choice);
   Bearer auth keeps prefetchers from triggering crawls.
-- Crawl results have no read API yet — they reach the frontend via the WS
-  Completed frame and live in the `data` collection (`GET /data?agentId=` is
-  future work).
+- Crawl-result docs survive agent deletion (no cascade) but are then unreachable
+  via `GET /agents/{agentId}/data` (unknown agent → 404).
 - A server restart (including `uvicorn --reload`) kills in-flight crawls; the
   startup sweep flips orphaned `Running` agents to `Failed`. Run without
   `--reload` when testing long crawls.

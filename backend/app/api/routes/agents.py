@@ -4,7 +4,8 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import CurrentUser, DbDep
 from app.schemas.agent import AgentCreate, AgentList, AgentOut, AgentUpdate
-from app.services import agent_service, crawler_service
+from app.schemas.data import DataList, DataOut
+from app.services import agent_service, crawler_service, data_service
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -55,6 +56,23 @@ async def run_agent(agent_id: str, user: CurrentUser, db: DbDep) -> AgentOut:
     pushed over the notifications WebSocket."""
     doc = await crawler_service.start_agent_crawl(db, agent_id, user["email"])
     return AgentOut.from_doc(doc)
+
+
+@router.get("/{agent_id}/data", response_model=DataList)
+async def list_agent_data(
+    agent_id: str,
+    user: CurrentUser,
+    db: DbDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    skip: Annotated[int, Query(ge=0)] = 0,
+) -> DataList:
+    """All crawled-data records produced by the agent, newest first."""
+    if await agent_service.get_agent(db, agent_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
+        )
+    docs, total = await data_service.list_by_agent(db, agent_id, skip=skip, limit=limit)
+    return DataList(data=[DataOut.from_doc(d) for d in docs], total=total)
 
 
 @router.delete(

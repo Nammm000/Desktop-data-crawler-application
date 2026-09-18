@@ -45,11 +45,11 @@ app/
 ├── services/token_service.py # refresh token issue/rotate/revoke, reuse detection
 ├── services/agent_service.py # agent CRUD, script JSON validation
 ├── services/crawler_service.py   # Scrapy spider + run orchestration, WS status broadcasts
-├── services/data_service.py  # crawled-data persistence (data collection)
+├── services/data_service.py  # crawled-data persistence, per-agent listing, deletes
 ├── services/connection_manager.py # shared WS registry for backend broadcasts
 └── api/
     ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser
-    └── routes/               # auth.py (5 auth endpoints), users.py (GET /users/me), agents.py (6 agent endpoints incl. /run), notifications.py (1 WS endpoint)
+    └── routes/               # auth.py (5 auth endpoints), users.py (GET /users/me), agents.py (7 agent endpoints incl. /run), data.py (2 data endpoints), notifications.py (1 WS endpoint)
 ```
 
 ## Golden Rules

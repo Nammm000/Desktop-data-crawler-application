@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import agents, auth, notifications, users
+from app.api.routes import agents, auth, data, notifications, users
 from app.core.config import get_settings
 from app.db.mongo import close_mongo, init_mongo
 from app.services import crawler_service
@@ -33,6 +33,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(agents.router, prefix="/api/v1")
+app.include_router(data.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 
 

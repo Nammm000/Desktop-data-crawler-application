@@ -27,7 +27,7 @@ paths:
 | `users` | `USERS_COLLECTION` (`app/models/user.py`) | `user_service.create_user`, `user_service.update_password`, `user_service.list_users` / `update_user_status` / `update_user_role` (admin), `user_service.delete_user` / `delete_users` (admin) |
 | `refresh_tokens` | `REFRESH_TOKENS_COLLECTION` | `token_service` (issue / rotate / revoke / delete_for_users) |
 | `agents` | `AGENTS_COLLECTION` (`app/models/agent.py`) | `agent_service` (create / get / list / update / delete), `crawler_service` (status flips on run) |
-| `data` | `DATA_COLLECTION` (`app/models/data.py`) | `data_service.insert_many`, called by `crawler_service` (one doc per crawled page) |
+| `data` | `DATA_COLLECTION` (`app/models/data.py`) | `data_service.insert_many`, called by `crawler_service` (one doc per crawled page); read by `data_service.list_by_agent` (`GET /agents/{agentId}/data`); deleted by `data_service.delete_one` / `delete_many` (`DELETE /data/{dataId}`, `DELETE /data`) |
 
 ```mermaid
 erDiagram
@@ -117,9 +117,10 @@ erDiagram
 
 ## `data` document shape
 
-One document per successfully crawled page, written only by agent runs
+One document per successfully crawled page, written by agent runs
 (`data_service.build_data_docs` + `insert_many`, called from
-`crawler_service.execute_crawl`).
+`crawler_service.execute_crawl`) and read by the per-agent listing
+(`data_service.list_by_agent`).
 
 | Field | Type | Set how |
 |---|---|---|
@@ -147,7 +148,7 @@ when an index with the same name exists.
 | `refresh_tokens` | `idx_user_revokes` | `{userId: ASCENDING}` | — | `update_many` family revocation (reuse detection, password change) |
 | `refresh_tokens` | `ttl_expires_at` | `{expiresAt: ASCENDING}` | TTL, `expireAfterSeconds=0` | background deletion of expired tokens |
 | `agents` | `uq_name` | `{name: ASCENDING}` | unique | duplicate-name 409s (race-proof, also catches renames on update); listing sorts in-memory until the collection grows |
-| `data` | `idx_agent_crawled` | `{agentId: ASCENDING, crawledAt: DESCENDING}` | — | newest-first data per agent (future `GET /data?agentId=`); the `{agentId}` prefix also serves plain equality lookups |
+| `data` | `idx_agent_crawled` | `{agentId: ASCENDING, crawledAt: DESCENDING}` | — | newest-first data per agent (`GET /agents/{agentId}/data`); the `{agentId}` prefix also serves plain equality lookups |
 
 ## Query patterns
 
@@ -214,6 +215,14 @@ when an index with the same name exists.
 
 - `insert_many(docs)` — one bulk insert per finished crawl, skipped when the
   crawl yielded 0 items (Motor rejects `insert_many([])`).
+- `find({"agentId": id}).sort([("crawledAt", DESCENDING), ("_id", DESCENDING)])
+  .skip(skip).limit(limit)` + `count_documents({"agentId": id})` — per-agent
+  listing (`list_by_agent`, `GET /agents/{agentId}/data`): newest first, `_id`
+  tiebreaker keeps pagination deterministic (one run stamps all its docs with
+  the same `crawledAt`); served by `idx_agent_crawled`.
+- `delete_one({"_id": data_id})` / `delete_many({"_id": {"$in": ids}})` — data
+  deletes (`delete_one` / `delete_many`, `DELETE /data/{dataId}` and
+  `DELETE /data`); bulk returns `deletedCount`, so unknown ids simply don't count.
 
 No projections are used anywhere — field filtering happens at the route boundary via
 `UserOut.from_doc` (`passwordHash` dropped, `_id` → `id`).

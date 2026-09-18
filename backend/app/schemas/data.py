@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -29,3 +29,18 @@ class DataOut(_CamelModel):
             fields=doc["fields"],
             crawled_at=doc["crawledAt"],
         )
+
+
+class DataList(_CamelModel):
+    """Paginated listing of crawled-data records."""
+
+    data: list[DataOut]
+    total: int
+
+
+class DataDeleteRequest(_CamelModel):
+    ids: list[str] = Field(min_length=1)
+
+
+class DataDeleteResult(_CamelModel):
+    deleted: int

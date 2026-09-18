@@ -27,6 +27,9 @@ paths:
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
 | GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, > `CRAWL_MAX_PAGES` links) |
+| GET | `/api/v1/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first) | `401`, `404` "Agent not found" |
+| DELETE | `/api/v1/data` | Bearer | `{ids}` (list, ≥1) | `200 {deleted: n}` (unknown ids don't count) | `401`, `422` |
+| DELETE | `/api/v1/data/{dataId}` | Bearer | — | `204` | `401`, `404` "Data not found" |
 | WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` every `NOTIFICATION_INTERVAL_SECONDS` (def 900) plus `{"type":"agentStatus",...}` frames on agent runs | handshake rejection (close 1008 → HTTP 403) |
 
 When adding/removing/changing an endpoint, update this table and the README.
