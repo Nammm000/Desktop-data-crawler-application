@@ -38,12 +38,14 @@ app/
 ├── core/security.py          # bcrypt, JWT access tokens, refresh token primitives
 ├── db/mongo.py               # Motor client lifecycle, ensure_indexes(), get_db
 ├── models/user.py            # UserRole enum, UserStatus constants, collection names
+├── models/agent.py           # AgentType/AgentFormat constants, AGENTS_COLLECTION
 ├── schemas/                  # Pydantic request/response models (camelCase aliases)
 ├── services/user_service.py  # user CRUD, duplicate detection, password updates
 ├── services/token_service.py # refresh token issue/rotate/revoke, reuse detection
+├── services/agent_service.py # agent CRUD, script JSON validation
 └── api/
     ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser
-    └── routes/               # auth.py (5 auth endpoints), users.py (GET /users/me)
+    └── routes/               # auth.py (5 auth endpoints), users.py (GET /users/me), agents.py (5 agent endpoints)
 ```
 
 ## Golden Rules

@@ -41,6 +41,8 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
 - `GET /users/me` profile endpoint
 - Admin user management: paginated user listing, status changes (bans apply
   immediately), role changes, account deletion (single + bulk, cascades refresh tokens)
+- Agent CRUD (any authenticated user): crawler definitions with a raw json/xml/md
+  script, unique names, JSON scripts validated on create and on the merged update view
 - Health check with database status
 
 ## API surface
@@ -61,6 +63,11 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 | PATCH | `/api/v1/users/{userId}/role` | Bearer (admin) | `{role}` admin/user | `200 UserOut` | `401`, `403`, `400` self-target, `404`, `422` |
 | DELETE | `/api/v1/users/{userId}` | Bearer (admin) | — | `204` | `401`, `403`, `400` self-target, `404` |
 | DELETE | `/api/v1/users` | Bearer (admin) | `{userIds}` (list, ≥1) | `200 {deleted: n}` | `401`, `403`, `400` self in list, `422` |
+| POST | `/api/v1/agents` | Bearer | `{name, format, script, type?, status?}` | `201 AgentOut` | `400` invalid JSON script, `409` "Agent name already taken", `422` |
+| GET | `/api/v1/agents` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 AgentList` `{agents, total}` | `401` |
+| GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` "Agent not found" |
+| PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
+| DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
 | GET | `/api/health` | — | — | `200 {"status":"ok","database":"up"\|"down"}` | — |
 
 ### Response shapes
@@ -99,6 +106,24 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 }
 ```
 
+`AgentOut` (crawler definition; `script` is the raw file content):
+
+```json
+{
+  "id": "<uuid string>",
+  "name": "Post Fetcher v2",
+  "type": "one_post",
+  "status": "New",
+  "format": "json",
+  "script": "{\"url\": \"https://example.com\"}",
+  "createdAt": "2026-01-01T00:00:00Z",
+  "updatedAt": "2026-01-01T00:00:00Z",
+  "updatedBy": "agenta@example.com"
+}
+```
+
+`AgentList` mirrors `UserList`: `{agents: [AgentOut], total: n}`.
+
 ### Request validation constraints (`app/schemas/auth.py`)
 
 | Field | Constraints |
@@ -112,7 +137,13 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 | `role` (patch role) | `admin` or `user` |
 | `userIds` (bulk delete) | list of ids, at least 1 |
 
-Query params for `GET /users`: `limit` 1–100 (default 50), `skip` ≥ 0 (default 0).
+Agent constraints (`app/schemas/agent.py`): `name` 1–100 chars, whitespace-stripped,
+unique (`409`); `type` `one_post` only (default); `status` `New` only (default);
+`format` `json`/`xml`/`md`; `script` 1–1M chars and must parse via `json.loads` when
+`format` is `json` (`400`, validated in `agent_service._validate_script` — also on
+the merged PATCH view). `updatedBy` is server-derived from the authenticated user
+(creator on create, patcher on update) and never accepted from the request body.
+Query params for `GET /agents` mirror `GET /users`.
 
 ## Configuration (`.env` via pydantic-settings)
 
@@ -146,12 +177,13 @@ backend/
 │   ├── main.py                   # FastAPI app: lifespan, CORS, routers, /api/health
 │   ├── api/
 │   │   ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser
-│   │   └── routes/               # auth.py (5 endpoints), users.py (GET /users/me + 5 admin endpoints)
+│   │   └── routes/               # auth.py, users.py, agents.py (5 endpoints, CurrentUser)
 │   ├── core/                     # config.py (settings), security.py (bcrypt/JWT/token utils)
 │   ├── db/mongo.py               # Motor lifecycle, ensure_indexes(), get_db
 │   ├── models/user.py            # UserRole, UserStatus, collection-name constants
+│   ├── models/agent.py           # AgentType, AgentFormat, AGENTS_COLLECTION
 │   ├── schemas/                  # Pydantic request/response models (camelCase aliases)
-│   └── services/                 # user_service.py, token_service.py (business logic)
+│   └── services/                 # user_service.py, token_service.py, agent_service.py
 ├── .claude/rules/                # convention + reference docs (this file)
 ├── docker-compose.yml            # MongoDB 8.0 only (no API service)
 ├── requirements.txt              # pinned deps

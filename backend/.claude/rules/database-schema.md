@@ -26,6 +26,7 @@ paths:
 |---|---|---|
 | `users` | `USERS_COLLECTION` (`app/models/user.py`) | `user_service.create_user`, `user_service.update_password`, `user_service.list_users` / `update_user_status` / `update_user_role` (admin), `user_service.delete_user` / `delete_users` (admin) |
 | `refresh_tokens` | `REFRESH_TOKENS_COLLECTION` | `token_service` (issue / rotate / revoke / delete_for_users) |
+| `agents` | `AGENTS_COLLECTION` (`app/models/agent.py`) | `agent_service` (create / get / list / update / delete) |
 
 ```mermaid
 erDiagram
@@ -48,6 +49,17 @@ erDiagram
         datetime expiresAt
         datetime revokedAt
         string replacedBy
+    }
+    agents {
+        string _id PK
+        string name UK
+        string type
+        string status
+        string format
+        string script
+        datetime createdAt
+        datetime updatedAt
+        string updatedBy
     }
 ```
 
@@ -79,6 +91,20 @@ erDiagram
 | `revokedAt` | datetime \| None | `None` at insert; set to `now` on rotation, logout, family revocation |
 | `replacedBy` | str | set **only during rotation**: the successor token's SHA-256 hash |
 
+## `agents` document shape
+
+| Field | Type | Set how |
+|---|---|---|
+| `_id` | str | `str(uuid.uuid4())` — string UUID, **never an ObjectId** |
+| `name` | str | from `AgentCreate`; 1–100 chars, whitespace-stripped by the Pydantic validator; unique (`uq_name`) |
+| `type` | str | constants class `AgentType` (`app/models/agent.py`), deliberately not an Enum; default `"one_post"` |
+| `status` | str | constants class `AgentStatus`; default `"New"`; patchable like every other field |
+| `format` | str | `"json"` \| `"xml"` \| `"md"` (`AgentFormat`) — describes how `script` should be parsed |
+| `script` | str | raw text content of a json/xml/md file; 1–1M chars; must parse via `json.loads` when format is `json` — enforced in `agent_service._validate_script` (also on the merged PATCH view) |
+| `createdAt` | datetime | tz-aware UTC (`datetime.now(timezone.utc)`) |
+| `updatedAt` | datetime | same `now` as `createdAt`; reset by `update_agent` |
+| `updatedBy` | str | acting user's email — creator on insert, patcher on update; server-derived from `CurrentUser` (never accepted from the request body) |
+
 ## Indexes (`ensure_indexes()` in `app/db/mongo.py`)
 
 Indexes change only in `ensure_indexes()`. `create_indexes` is idempotent — a no-op
@@ -91,6 +117,7 @@ when an index with the same name exists.
 | `refresh_tokens` | `uq_token_hash` | `{tokenHash: ASCENDING}` | unique | O(1) atomic token claim / lookup |
 | `refresh_tokens` | `idx_user_revokes` | `{userId: ASCENDING}` | — | `update_many` family revocation (reuse detection, password change) |
 | `refresh_tokens` | `ttl_expires_at` | `{expiresAt: ASCENDING}` | TTL, `expireAfterSeconds=0` | background deletion of expired tokens |
+| `agents` | `uq_name` | `{name: ASCENDING}` | unique | duplicate-name 409s (race-proof, also catches renames on update); listing sorts in-memory until the collection grows |
 
 ## Query patterns
 
@@ -132,6 +159,20 @@ when an index with the same name exists.
 - `delete_many({"userId": {"$in": user_ids}})` — cascade on user deletion (`delete_for_users`):
   tokens are HARD-deleted, so a replayed token reads as unknown → 401 with no cascade
   (vs. ban, which only revokes and keeps the reuse-detection trail).
+
+`agents`:
+
+- `insert_one(doc)` — create; `_validate_script` runs **before** any write;
+  `DuplicateKeyError` → 409 "Agent name already taken".
+- `find_one({"_id": agent_id})` — get.
+- `find({}).sort([("createdAt", DESCENDING), ("_id", DESCENDING)]).skip(skip).limit(limit)`
+  + `count_documents({})` — listing: same shape and in-memory-sort policy as `list_users`.
+- PATCH: `find_one` → `_validate_script` on the merged (old ∪ new) `format`/`script`
+  pair → `find_one_and_update({"_id"}, {"$set": {..., "updatedAt", "updatedBy"}}, ReturnDocument.AFTER)`
+  with a second `DuplicateKeyError` catch — renaming to a taken name conflicts
+  **here**, not at insert. The read-merge-validate-write sequence is not atomic
+  across concurrent PATCHes (last-write-wins, same tolerance as the rest of the codebase).
+- `delete_one({"_id": agent_id})` — delete.
 
 No projections are used anywhere — field filtering happens at the route boundary via
 `UserOut.from_doc` (`passwordHash` dropped, `_id` → `id`).

@@ -67,6 +67,11 @@ All routes are prefixed with `/api/v1`. JSON uses camelCase
 | PATCH | `/users/{userId}/role` | Bearer (admin) | `{role}` admin/user | `200` `UserOut` | `401`, `403`, `400` self-target, `404`, `422` |
 | DELETE | `/users/{userId}` | Bearer (admin) | — | `204` | `401`, `403`, `400` self-target, `404` |
 | DELETE | `/users` | Bearer (admin) | `{userIds}` (list, ≥1) | `200` `{"deleted": n}` | `401`, `403`, `400` self in list, `422` |
+| POST | `/agents` | Bearer | `{name, format, script, type?, status?}` | `201` `AgentOut` | `400` invalid JSON script, `409` dup name, `422` |
+| GET | `/agents` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `AgentList` `{agents, total}` | `401` |
+| GET | `/agents/{agentId}` | Bearer | — | `200` `AgentOut` | `401`, `404` |
+| PATCH | `/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200` `AgentOut` | `400` invalid JSON script, `409` dup name, `404`, `422` |
+| DELETE | `/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
 
 `UserOut`: `{id, username, email, role, status, createdAt}` — `passwordHash` is
 never exposed. `role` is `admin` or `user`; `status` is a plain string
@@ -77,6 +82,17 @@ deactivating a user (`status` ≠ `active`) immediately revokes all of their ref
 tokens (un-banning restores nothing — they log in again); role changes apply on
 the target's next request (role is re-read from the DB, not the JWT). Admins get
 `400` when targeting their own account, preventing self-lockout.
+
+`AgentOut`: `{id, name, type, status, format, script, createdAt, updatedAt, updatedBy}` —
+agents are crawler definitions available to every authenticated user. `type` defaults
+to `one_post`; `status` defaults to `New`; `format` is `json`, `xml`, or `md` and
+describes how `script` (the raw text content of the file) should be parsed. When
+`format` is `json`, the script must be valid JSON (`400` otherwise — checked on
+create and on update, where old and new values are validated together, so switching
+only the format to `json` against a stored non-JSON script is rejected). Names are
+unique (1–100 chars, whitespace-stripped). `updatedBy` records the email of the
+acting user — the creator on create, the patcher on update — and is set by the
+server, never accepted from the request body.
 
 ### Quick smoke test
 
@@ -113,6 +129,18 @@ curl -s -X POST $BASE/auth/refresh -H 'Content-Type: application/json' \
 # Logout
 curl -i -X POST $BASE/auth/logout -H 'Content-Type: application/json' \
   -d '{"refreshToken":"<refreshToken>"}'
+
+# Agents: create (md / json script) -> list -> update -> delete
+curl -s -X POST $BASE/agents -H "Authorization: Bearer <accessToken>" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"my-agent","format":"md","script":"# Steps\n1. fetch post"}'
+curl -s -X POST $BASE/agents -H "Authorization: Bearer <accessToken>" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"json-agent","format":"json","script":"{\"url\":\"https://example.com\"}"}'
+curl -s "$BASE/agents?limit=20&skip=0" -H "Authorization: Bearer <accessToken>"
+curl -s -X PATCH $BASE/agents/<agentId> -H "Authorization: Bearer <accessToken>" \
+  -H 'Content-Type: application/json' -d '{"name":"renamed-agent"}'
+curl -s -X DELETE $BASE/agents/<agentId> -H "Authorization: Bearer <accessToken>"
 ```
 
 ## Project Structure
@@ -124,12 +152,14 @@ app/
 ├── core/security.py         # bcrypt hashing, JWT create/decode, refresh token primitives
 ├── db/mongo.py              # Motor client lifecycle, index bootstrap, get_db dependency
 ├── models/user.py           # UserRole enum, UserStatus constants, collection names
+├── models/agent.py          # AgentType/AgentFormat constants, AGENTS_COLLECTION
 ├── schemas/                 # Pydantic request/response models (camelCase aliases)
 ├── services/user_service.py # User CRUD + duplicate detection
 ├── services/token_service.py# Refresh token issue/rotate/revoke + reuse detection
+├── services/agent_service.py# Agent CRUD + script JSON validation
 └── api/
     ├── deps.py              # get_current_user / get_current_admin dependencies
-    └── routes/              # auth.py (5 endpoints), users.py (GET /users/me + 5 admin endpoints)
+    └── routes/              # auth.py, users.py, agents.py (5 agent endpoints)
 ```
 
 ## MongoDB
@@ -142,6 +172,7 @@ docker compose exec mongo mongosh -u crawler -p crawlerpass \
 show collections
 db.users.findOne()
 db.refresh_tokens.getIndexes()
+db.agents.getIndexes()
 ```
 
 Collections:
@@ -150,6 +181,8 @@ Collections:
 - `refresh_tokens` — `{_id, tokenHash (sha256), userId, createdAt, expiresAt, revokedAt, replacedBy}`
   with a unique index on `tokenHash`, a `userId` index for revocations, and a TTL
   index that deletes documents once `expiresAt` passes.
+- `agents` — `{_id, name, type, format, script, createdAt, updatedAt}` with a
+  unique index on `name`.
 
 ## Notes
 

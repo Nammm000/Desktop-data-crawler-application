@@ -1,4 +1,4 @@
-"""Reusable input widgets."""
+"""Reusable input widgets: password fields, macOS-safe combos, overlay scrollbar."""
 
 from __future__ import annotations
 
@@ -6,7 +6,17 @@ from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPainter
-from PySide6.QtWidgets import QFrame, QLineEdit, QScrollArea, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFrame,
+    QLineEdit,
+    QScrollArea,
+    QStyle,
+    QStyleFactory,
+    QStyleOptionViewItem,
+    QStyledItemDelegate,
+    QWidget,
+)
 
 _ICONS_DIR = Path(__file__).resolve().parent.parent / "resources" / "icons"
 
@@ -36,6 +46,73 @@ class PasswordLineEdit(QLineEdit):
         )
         self._action.setIcon(self._icon("eye-off.svg" if self._visible else "eye.svg"))
         self._action.setToolTip("Hide password" if self._visible else "Show password")
+
+
+class ChosenCombo(QComboBox):
+    """A combo whose popup opens without a preselected row.
+
+    The popup normally opens with the current option selected, painting the
+    #EEF2FF selection tint on it — the indigo chosen-option text that
+    _ChosenRowDelegate draws should stand alone at rest. Hover re-selects
+    rows as usual.
+    """
+
+    def showPopup(self) -> None:
+        super().showPopup()
+        self.view().selectionModel().clearSelection()
+
+
+def chosen_combo(object_name: str) -> ChosenCombo:
+    combo = ChosenCombo(objectName=object_name)
+    # QMacStyle squeezes the popup ~23px shorter than its rows, so the other
+    # options hide behind an overlay scroller; Fusion metrics under the QSS
+    # keep the popup full height — style.qss still paints everything.
+    combo.setStyle(QStyleFactory.create("Fusion"))
+    combo.setItemDelegate(_ChosenRowDelegate(combo))
+    return combo
+
+
+_ACCENT = QColor("#4F46E5")
+
+
+class _ChosenRowDelegate(QStyledItemDelegate):
+    """Paints the popup's chosen row with accent-colored text.
+
+    QSS cannot target the current item (no :current state for view items, and
+    the combo popup drops ForegroundRole), so this is the one channel left.
+    At rest the row also loses the selection tint — the color alone marks it;
+    hovered rows keep the normal #EEF2FF treatment.
+    """
+
+    def __init__(self, combo: QComboBox) -> None:
+        super().__init__(combo)
+        self._combo = combo
+
+    def createEditor(self, parent, option, index):  # non-editable, like the stock delegate
+        return None
+
+    def paint(self, painter, option, index) -> None:
+        # Only recolor rows painted inside the popup view — the closed combo's
+        # label also goes through the delegate but must keep its normal text.
+        if option.widget is not self._combo.view() or index.row() != self._combo.currentIndex():
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
+        if not hovered:
+            opt.state &= ~QStyle.StateFlag.State_Selected
+        style = opt.widget.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+        if not text:
+            return
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget)
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(_ACCENT)
+        painter.drawText(rect, int(opt.displayAlignment), text)
+        painter.restore()
 
 
 class _ScrollIndicator(QWidget):

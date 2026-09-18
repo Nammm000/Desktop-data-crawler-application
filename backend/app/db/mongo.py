@@ -3,6 +3,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo import ASCENDING, IndexModel
 
 from app.core.config import get_settings
+from app.models.agent import AGENTS_COLLECTION
 from app.models.user import REFRESH_TOKENS_COLLECTION, USERS_COLLECTION
 
 
@@ -39,6 +40,11 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
             IndexModel(
                 [("expiresAt", ASCENDING)], expireAfterSeconds=0, name="ttl_expires_at"
             ),
+        ]
+    )
+    await db[AGENTS_COLLECTION].create_indexes(
+        [
+            IndexModel([("name", ASCENDING)], unique=True, name="uq_name"),
         ]
     )
 

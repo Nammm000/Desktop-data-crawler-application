@@ -58,8 +58,9 @@ Mapping to response models happens only at the route boundary via
 - **Middleware**: only `CORSMiddleware` — `allow_origins=settings.cors_origins_list`,
   `allow_credentials=False` (Bearer headers, not cookies), `allow_methods=["*"]`,
   `allow_headers=["*"]`.
-- **Routers**: `auth.router` (`/auth`, tag `auth`) and `users.router` (`/users`, tag
-  `users`), both mounted with `prefix="/api/v1"`.
+- **Routers**: `auth.router` (`/auth`, tag `auth`), `users.router` (`/users`, tag
+  `users`), and `agents.router` (`/agents`, tag `agents`), all mounted with
+  `prefix="/api/v1"`.
 - **Health**: `GET /api/health` (unversioned) pings Mongo and reports
   `{"status": "ok", "database": "up" | "down"}`.
 
@@ -74,14 +75,18 @@ app/
 │                             # generate_refresh_token, hash_refresh_token
 ├── db/mongo.py               # init_mongo / close_mongo, ensure_indexes, get_db
 ├── models/user.py            # UserRole, UserStatus, USERS_COLLECTION, REFRESH_TOKENS_COLLECTION
+├── models/agent.py           # AgentType, AgentFormat, AGENTS_COLLECTION
 ├── schemas/auth.py           # SignupRequest, LoginRequest, RefreshTokenRequest,
 │                             # LogoutRequest, ChangePasswordRequest, TokenPair
 ├── schemas/user.py           # UserOut (+ from_doc boundary)
+├── schemas/agent.py          # AgentOut/AgentCreate/AgentUpdate/AgentList
 ├── services/user_service.py  # create_user, get_by_email, get_by_id, update_password
 ├── services/token_service.py # issue/rotate/revoke refresh tokens, reuse detection
+├── services/agent_service.py # agent CRUD, _validate_script (json format check)
 └── api/
     ├── deps.py               # bearer_scheme, DbDep, CurrentUser, AdminUser (admin guard)
-    └── routes/               # auth.py (5 endpoints), users.py (GET /users/me + 5 admin endpoints)
+    └── routes/               # auth.py (5 endpoints), users.py (GET /users/me + 5 admin endpoints),
+│                             # agents.py (5 agent endpoints, CurrentUser)
 ```
 
 ## Token architecture

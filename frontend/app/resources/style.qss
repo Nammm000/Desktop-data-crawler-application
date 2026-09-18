@@ -127,7 +127,9 @@ QFrame#dialogCard {
     border-radius: 12px;
 }
 
-QDialog#changePasswordDialog {
+QDialog#changePasswordDialog,
+QDialog#confirmDialog,
+QDialog#agentDialog {
     background-color: #F5F6FA;
 }
 
@@ -181,16 +183,18 @@ QMenu#accountMenu::item:disabled {
     color: #9CA3AF;
 }
 
-/* --- User management --------------------------------------------------------- */
+/* --- Management tables (users, agents) --------------------------------------- */
 
-QTableWidget#usersTable {
+QTableWidget#usersTable,
+QTableWidget#agentsTable {
     background-color: #FFFFFF;
     border: 1px solid #E2E4EA;
     border-radius: 12px;
     gridline-color: #F0F1F5;
     alternate-background-color: #FAFAFC;
 }
-QHeaderView#usersTableHeader::section {
+QHeaderView#usersTableHeader::section,
+QHeaderView#agentsTableHeader::section {
     background-color: #F9FAFC;
     border: none;
     border-bottom: 1px solid #E2E4EA;
@@ -234,14 +238,214 @@ QComboBox#roleCombo QAbstractItemView,
 QComboBox#statusCombo QAbstractItemView {
     background-color: #FFFFFF;
     border: 1px solid #E2E4EA;
+    color: #1F2430;
     selection-background-color: #EEF2FF;
     selection-color: #1F2430;
     outline: none;
+}
+QComboBox#limitSelector QAbstractItemView::item,
+QComboBox#roleCombo QAbstractItemView::item,
+QComboBox#statusCombo QAbstractItemView::item {
+    background-color: transparent;
+}
+QComboBox#limitSelector QAbstractItemView::item:selected,
+QComboBox#roleCombo QAbstractItemView::item:selected,
+QComboBox#statusCombo QAbstractItemView::item:selected,
+QComboBox#limitSelector QAbstractItemView::item:hover,
+QComboBox#roleCombo QAbstractItemView::item:hover,
+QComboBox#statusCombo QAbstractItemView::item:hover {
+    background-color: #EEF2FF;
 }
 
 QPushButton#pageButton {
     min-height: 30px;
     padding: 0 12px;
+}
+
+QCheckBox#rowCheckBox,
+QCheckBox#selectAllCheckBox {
+    background: transparent;
+    spacing: 8px;
+}
+QCheckBox#selectAllCheckBox {
+    color: #4B5563;
+    font-size: 12px;
+    font-weight: 600;
+}
+QCheckBox#rowCheckBox::indicator,
+QCheckBox#selectAllCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #E2E4EA;
+    border-radius: 4px;
+    background-color: #FFFFFF;
+}
+QCheckBox#rowCheckBox:hover::indicator,
+QCheckBox#selectAllCheckBox:hover::indicator {
+    border-color: #4F46E5;
+}
+QCheckBox#rowCheckBox::indicator:checked,
+QCheckBox#selectAllCheckBox::indicator:checked {
+    background-color: #4F46E5;
+    border-color: #4F46E5;
+    image: url(%icons%/check.svg);
+}
+QCheckBox#rowCheckBox::indicator:disabled,
+QCheckBox#selectAllCheckBox::indicator:disabled {
+    background-color: #F3F4F6;
+    border-color: #E2E4EA;
+}
+
+QPushButton#rowDeleteButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+}
+QPushButton#rowDeleteButton:hover {
+    background-color: #FEF2F2;
+    border-color: #FECACA;
+}
+QPushButton#rowDeleteButton:pressed {
+    background-color: #FEE2E2;
+}
+
+QPushButton#dangerButton {
+    background-color: #DC2626;
+    border: 1px solid #DC2626;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+QPushButton#dangerButton:hover {
+    background-color: #B91C1C;
+    border-color: #B91C1C;
+}
+QPushButton#dangerButton:pressed {
+    background-color: #991B1B;
+    border-color: #991B1B;
+}
+QPushButton#dangerButton:disabled {
+    background-color: #FCA5A5;
+    border-color: #FCA5A5;
+    color: #FEF2F2;
+}
+
+/* --- Agent management ------------------------------------------------------ */
+
+QPushButton#rowEditButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+}
+QPushButton#rowEditButton:hover {
+    background-color: #F3F4F6;
+    border-color: #E2E4EA;
+}
+QPushButton#rowEditButton:pressed {
+    background-color: #E9EBF0;
+}
+
+/* Dialog-form metrics (sits between 36px QLineEdit fields, so it must not
+   use the 28px table-combo metrics above). */
+QComboBox#formatCombo {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    border-radius: 8px;
+    min-height: 36px;
+    padding: 0 12px;
+}
+QComboBox#formatCombo:disabled {
+    background-color: #F3F4F6;
+    color: #9CA3AF;
+}
+QComboBox#formatCombo::drop-down {
+    border: none;
+    background: transparent;
+    width: 22px;
+}
+QComboBox#formatCombo::down-arrow {
+    image: url(%icons%/chevron-down.svg);
+    width: 12px;
+    height: 12px;
+}
+QComboBox#formatCombo QAbstractItemView {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E4EA;
+    color: #1F2430;
+    selection-background-color: #EEF2FF;
+    selection-color: #1F2430;
+    outline: none;
+}
+QComboBox#formatCombo QAbstractItemView::item {
+    background-color: transparent;
+}
+QComboBox#formatCombo QAbstractItemView::item:selected,
+QComboBox#formatCombo QAbstractItemView::item:hover {
+    background-color: #EEF2FF;
+}
+
+QPlainTextEdit#scriptEdit {
+    background-color: #F3F4F6;
+    color: #000000;
+    border: 1px solid #E2E4EA;
+    border-radius: 8px;
+    min-height: 200px;
+    padding: 8px 12px;
+    font-family: "SF Mono", "Cascadia Mono", "Menlo", "Consolas", monospace;
+    font-size: 12px;
+}
+QPlainTextEdit#scriptEdit:focus {
+    border: 1px solid #4F46E5;
+}
+QPlainTextEdit#scriptEdit:disabled {
+    background-color: #F3F4F6;
+    color: #9CA3AF;
+}
+
+/* JSON key-value rows (AgentDialog json mode). Buttons are fixed 24px: the
+   caption grid above the rows mirrors these columns (same stretches, spacing
+   and minimums) so "key"/"value" stay aligned over their columns. */
+QPushButton#addRowButton,
+QPushButton#removeRowButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0;
+}
+QPushButton#addRowButton:hover {
+    background-color: #F3F4F6;
+    border-color: #E2E4EA;
+}
+QPushButton#addRowButton:pressed {
+    background-color: #E9EBF0;
+}
+QPushButton#removeRowButton:hover {
+    background-color: #FEF2F2;
+    border-color: #FECACA;
+}
+QPushButton#removeRowButton:pressed {
+    background-color: #FEE2E2;
+}
+
+QScrollArea#kvRowsScroll {
+    background: transparent;
+    border: none;
+}
+QWidget#kvRowsHost {
+    background: transparent;
 }
 
 /* --- Labels ----------------------------------------------------------------- */
@@ -261,6 +465,11 @@ QLabel#fieldCaption {
     font-size: 12px;
     font-weight: 600;
     color: #4B5563;
+}
+QLabel#columnCaption {
+    font-size: 12px;
+    font-weight: 500;
+    color: #9CA3AF;
 }
 QLabel#pageTitle {
     font-size: 22px;

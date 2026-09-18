@@ -21,6 +21,11 @@ paths:
 | PATCH | `/api/v1/users/{userId}/role` | Bearer (admin) | `{role}` admin/user | `200 UserOut` | `401`, `403`, `400` self-target, `404`, `422` |
 | DELETE | `/api/v1/users/{userId}` | Bearer (admin) | — | `204` | `401`, `403`, `400` self-target, `404` |
 | DELETE | `/api/v1/users` | Bearer (admin) | `{userIds}` (list, ≥1) | `200 {deleted: n}` | `401`, `403`, `400` self in list, `422` |
+| POST | `/api/v1/agents` | Bearer | `{name, format, script, type?, status?}` | `201 AgentOut` | `400` invalid JSON script, `409` dup name, `422` |
+| GET | `/api/v1/agents` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 AgentList` `{agents, total}` | `401` |
+| GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` |
+| PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
+| DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
 
 When adding/removing/changing an endpoint, update this table and the README.
 
@@ -42,6 +47,13 @@ When adding/removing/changing an endpoint, update this table and the README.
   (400 self-guard — status, role, and delete).
 - Password constraints live in `PASSWORD_FIELD` and `_check_password_bytes`
   (`app/schemas/auth.py`) — reuse them; never redefine per-endpoint rules.
+- Agent endpoints are open to every authenticated user (`CurrentUser`). When the
+  effective `format` is `json`, the effective `script` must parse via `json.loads` —
+  validated in `agent_service._validate_script` on create and on the merged
+  (old ∪ new) PATCH view (`400` otherwise); `xml`/`md` scripts are stored as-is.
+  Agent names are unique (`409` on create and on rename). `updatedBy` is
+  server-derived from the authenticated user (creator on create, patcher on
+  update) — never accepted from the request body.
 
 ## Status-code semantics (keep consistent)
 

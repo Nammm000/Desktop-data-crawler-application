@@ -51,21 +51,42 @@ class UserPage:
     total: int
 
 
+@dataclass(frozen=True)
+class Agent:
+    id: str
+    name: str
+    type: str  # "one_post"
+    status: str  # "New"
+    format: str  # "json" | "xml" | "md"
+    script: str
+    created_at: datetime | None
+    updated_at: datetime | None
+    updated_by: str
+
+
+@dataclass(frozen=True)
+class AgentPage:
+    agents: tuple[Agent, ...]
+    total: int
+
+
+def _parse_timestamp(raw) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def _parse_user(data: dict) -> User:
-    created_at = None
-    raw = data.get("createdAt")
-    if raw:
-        try:
-            created_at = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        except ValueError:
-            pass
     return User(
         id=data["id"],
         username=data["username"],
         email=data["email"],
         role=data.get("role", "user"),
         status=data.get("status", "active"),
-        created_at=created_at,
+        created_at=_parse_timestamp(data.get("createdAt")),
     )
 
 
@@ -84,6 +105,31 @@ def _parse_user_page(data: dict) -> UserPage:
         users=tuple(_parse_user(u) for u in data["users"]),
         total=int(data["total"]),
     )
+
+
+def _parse_agent(data: dict) -> Agent:
+    return Agent(
+        id=data["id"],
+        name=data["name"],
+        type=data.get("type", "one_post"),
+        status=data.get("status", "New"),
+        format=data.get("format", "json"),
+        script=data.get("script", ""),
+        created_at=_parse_timestamp(data.get("createdAt")),
+        updated_at=_parse_timestamp(data.get("updatedAt")),
+        updated_by=data.get("updatedBy", ""),
+    )
+
+
+def _parse_agent_page(data: dict) -> AgentPage:
+    return AgentPage(
+        agents=tuple(_parse_agent(a) for a in data["agents"]),
+        total=int(data["total"]),
+    )
+
+
+def _parse_deleted_count(data: dict) -> int:
+    return int(data["deleted"])
 
 
 def _parse_or_fail(payload, parser):
@@ -247,3 +293,65 @@ class ApiClient:
             bearer=access_token,
         )
         return _parse_or_fail(payload, _parse_user)
+
+    def delete_user(self, *, access_token: str, user_id: str) -> None:
+        # 204 with an empty body: _request returns None, nothing to parse.
+        self._request("DELETE", f"/api/v1/users/{user_id}", bearer=access_token)
+
+    def delete_users(self, *, access_token: str, user_ids: list[str]) -> int:
+        payload = self._request(
+            "DELETE",
+            "/api/v1/users",
+            json_body={"userIds": list(user_ids)},
+            bearer=access_token,
+        )
+        return _parse_or_fail(payload, _parse_deleted_count)
+
+    # -- agents -----------------------------------------------------------
+
+    def list_agents(
+        self, *, access_token: str, limit: int = 50, skip: int = 0
+    ) -> AgentPage:
+        payload = self._request(
+            "GET",
+            "/api/v1/agents",
+            params={"limit": limit, "skip": skip},
+            bearer=access_token,
+        )
+        return _parse_or_fail(payload, _parse_agent_page)
+
+    def create_agent(
+        self, *, access_token: str, name: str, format: str, script: str
+    ) -> Agent:
+        payload = self._request(
+            "POST",
+            "/api/v1/agents",
+            json_body={"name": name.strip(), "format": format, "script": script},
+            bearer=access_token,
+        )
+        return _parse_or_fail(payload, _parse_agent)
+
+    def update_agent(
+        self,
+        *,
+        access_token: str,
+        agent_id: str,
+        name: str | None = None,
+        format: str | None = None,
+        script: str | None = None,
+    ) -> Agent:
+        body: dict = {}
+        if name is not None:
+            body["name"] = name.strip()
+        if format is not None:
+            body["format"] = format
+        if script is not None:
+            body["script"] = script
+        payload = self._request(
+            "PATCH", f"/api/v1/agents/{agent_id}", json_body=body, bearer=access_token
+        )
+        return _parse_or_fail(payload, _parse_agent)
+
+    def delete_agent(self, *, access_token: str, agent_id: str) -> None:
+        # 204 with an empty body: _request returns None, nothing to parse.
+        self._request("DELETE", f"/api/v1/agents/{agent_id}", bearer=access_token)

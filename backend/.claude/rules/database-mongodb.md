@@ -13,13 +13,19 @@ paths:
 - The client is created in the FastAPI lifespan (`init_mongo` in `app/db/mongo.py`),
   never at import time. Services receive `db` (an `AsyncIOMotorDatabase`) as a
   parameter; routes get it via `DbDep` (`Depends(get_db)`).
-- Collection names come from constants in `app/models/user.py`
-  (`USERS_COLLECTION`, `REFRESH_TOKENS_COLLECTION`) — never inline strings.
+- Collection names come from constants in `app/models/`
+  (`user.py`: `USERS_COLLECTION`, `REFRESH_TOKENS_COLLECTION`;
+  `agent.py`: `AGENTS_COLLECTION`) — never inline strings.
 
 ## Document shapes
 
 - `users`: `{_id: <uuid str>, username, email, passwordHash, role, status, createdAt, updatedAt}`
 - `refresh_tokens`: `{_id, tokenHash, userId, createdAt, expiresAt, revokedAt, replacedBy?}`
+- `agents`: `{_id, name, type, status, format, script, createdAt, updatedAt, updatedBy}` —
+  `status` defaults to `"New"`; `updatedBy` is the acting user's email (creator on insert,
+  patcher on update, server-derived); `script` holds the raw text of a json/xml/md file;
+  when `format` is `json` it must parse via `json.loads` (checked in
+  `agent_service._validate_script`, also on the merged PATCH view)
 
 Rules:
 
@@ -35,7 +41,8 @@ Rules:
 - Indexes are defined ONLY in `ensure_indexes()` (`app/db/mongo.py`) using named
   `IndexModel`s — `create_indexes` is idempotent on startup. Current set:
   unique `users.email`, unique `users.username`, unique `refresh_tokens.tokenHash`,
-  `refresh_tokens.userId`, TTL `refresh_tokens.expiresAt` (`expireAfterSeconds=0`).
+  `refresh_tokens.userId`, TTL `refresh_tokens.expiresAt` (`expireAfterSeconds=0`),
+  unique `agents.name`.
 - TTL deletion lags up to ~60s — always ALSO check `expiresAt > now` in queries/code.
 
 ## Concurrency & errors

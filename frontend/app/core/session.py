@@ -13,7 +13,15 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QSettings, Signal
 
-from app.api.client import ApiClient, ApiError, TokenPair, User, UserPage
+from app.api.client import (
+    Agent,
+    AgentPage,
+    ApiClient,
+    ApiError,
+    TokenPair,
+    User,
+    UserPage,
+)
 from app.core.worker import run_async
 
 _REFRESH_TOKEN_KEY = "auth/refreshToken"
@@ -231,6 +239,104 @@ class SessionController(QObject):
             )
 
         run_async(work, on_success or (lambda _user: None), on_error or (lambda _exc: None))
+
+    def delete_user(
+        self,
+        user_id: str,
+        on_success: Callable[[None], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> None:
+            return self._authorized_call(
+                lambda token: self._client.delete_user(access_token=token, user_id=user_id)
+            )
+
+        run_async(work, on_success or (lambda _none: None), on_error or (lambda _exc: None))
+
+    def delete_users(
+        self,
+        user_ids: list[str],
+        on_success: Callable[[int], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> int:
+            return self._authorized_call(
+                lambda token: self._client.delete_users(
+                    access_token=token, user_ids=user_ids
+                )
+            )
+
+        run_async(work, on_success or (lambda _count: None), on_error or (lambda _exc: None))
+
+    def list_agents(
+        self,
+        limit: int,
+        skip: int,
+        on_success: Callable[[AgentPage], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> AgentPage:
+            return self._authorized_call(
+                lambda token: self._client.list_agents(
+                    access_token=token, limit=limit, skip=skip
+                )
+            )
+
+        run_async(work, on_success or (lambda _page: None), on_error or (lambda _exc: None))
+
+    def create_agent(
+        self,
+        name: str,
+        format: str,
+        script: str,
+        on_success: Callable[[Agent], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> Agent:
+            return self._authorized_call(
+                lambda token: self._client.create_agent(
+                    access_token=token, name=name, format=format, script=script
+                )
+            )
+
+        run_async(work, on_success or (lambda _agent: None), on_error or (lambda _exc: None))
+
+    def update_agent(
+        self,
+        agent_id: str,
+        name: str,
+        format: str,
+        script: str,
+        on_success: Callable[[Agent], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> Agent:
+            return self._authorized_call(
+                lambda token: self._client.update_agent(
+                    access_token=token,
+                    agent_id=agent_id,
+                    name=name,
+                    format=format,
+                    script=script,
+                )
+            )
+
+        run_async(work, on_success or (lambda _agent: None), on_error or (lambda _exc: None))
+
+    def delete_agent(
+        self,
+        agent_id: str,
+        on_success: Callable[[None], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> None:
+            return self._authorized_call(
+                lambda token: self._client.delete_agent(
+                    access_token=token, agent_id=agent_id
+                )
+            )
+
+        run_async(work, on_success or (lambda _none: None), on_error or (lambda _exc: None))
 
     # -- token plumbing (worker threads) ------------------------------------
 
