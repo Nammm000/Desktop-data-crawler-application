@@ -1,7 +1,7 @@
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -13,6 +13,14 @@ from app.services import user_service
 bearer_scheme = HTTPBearer(auto_error=False)
 
 DbDep = Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+
+
+def get_db_ws(websocket: WebSocket) -> AsyncIOMotorDatabase:
+    """get_db for websocket routes (Request is not injectable there)."""
+    return websocket.app.state.mongo_db
+
+
+WsDbDep = Annotated[AsyncIOMotorDatabase, Depends(get_db_ws)]
 
 
 def _unauthorized(detail: str) -> HTTPException:

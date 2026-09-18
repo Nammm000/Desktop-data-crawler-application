@@ -16,6 +16,10 @@ curl -s localhost:8000/api/health        # {"status":"ok","database":"up"}
 
 # 3. Headless smoke test: QT_QPA_PLATFORM=offscreen, drive the real widgets
 #    via QTimer phases inside app.exec(), inspect window.grab().save("...png").
+
+# 4. Notification stream: run uvicorn with a shortened interval instead of
+#    waiting 15 minutes:
+NOTIFICATION_INTERVAL_SECONDS=3 ../backend/.venv/bin/uvicorn app.main:app --port 8000
 ```
 
 Checklist before finishing any change (covers every endpoint):
@@ -82,3 +86,12 @@ Checklist before finishing any change (covers every endpoint):
   page clamps the page index; delete while the backend is down → banner +
   resync; deleting an already-removed agent (second user/curl) → "Agent not
   found" banner + resync
+- Notifications (temporary 15-min push; shorten with
+  `NOTIFICATION_INTERVAL_SECONDS=3` on uvicorn): bell button left of the
+  email button, no unread tint at login; a push flips the bell to the indigo
+  unread tint; clicking the bell clears unread and lists `15 minutes have
+  passed · HH:MM` newest-first (dark informational text; "No notifications"
+  when empty); log out → socket closed, list cleared, unread cleared, no
+  reconnect attempts; kill uvicorn mid-session → app stays responsive, no
+  wedge; restart uvicorn → the socket reconnects and a new push arrives
+  (garbage token at the handshake → rejected, close 1008 / HTTP 403)

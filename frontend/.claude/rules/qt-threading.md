@@ -20,7 +20,17 @@ globs: ["app/core/**", "app/ui/**"]
 
 - `SessionController` exposes GUI-thread entry points (`bootstrap`,
   `login_and_start`, `signup_and_start`, `logout`, `fetch_current_user`,
-  `change_password`) that spawn `run_async` work — UI code calls only these,
-  never `ApiClient` directly.
+  `change_password`, plus the notification-stream helpers
+  `current_access_token` / `refresh_access_token`) that spawn `run_async`
+  work — UI code calls only these, never `ApiClient` directly.
 - QSettings is not thread-safe: persistence happens only in slots connected
   to `tokens_rotated` / `_clear_tokens_requested`.
+
+## WebSocket (notifications)
+
+- `NotificationClient` (`app/core/notifications.py`) uses Qt's built-in
+  `QWebSocket` — event-loop native, so it runs entirely on the GUI thread:
+  signals in, signals out, no `run_async`, no worker thread, no QSettings.
+- Reconnects on a 5 s single-shot `QTimer`; a handshake rejection with an
+  unchanged token triggers one `refresh_access_token()` (single-flight; a 401
+  refresh failure force-logs-out, transport failures just retry later).

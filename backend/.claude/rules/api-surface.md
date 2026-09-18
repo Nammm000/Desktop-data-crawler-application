@@ -26,6 +26,7 @@ paths:
 | GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` |
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
+| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` every `NOTIFICATION_INTERVAL_SECONDS` (def 900) | handshake rejection (close 1008 → HTTP 403) |
 
 When adding/removing/changing an endpoint, update this table and the README.
 
@@ -54,6 +55,14 @@ When adding/removing/changing an endpoint, update this table and the README.
   Agent names are unique (`409` on create and on rename). `updatedBy` is
   server-derived from the authenticated user (creator on create, patcher on
   update) — never accepted from the request body.
+- WebSocket routes (`app/api/routes/notifications.py`): the access token rides
+  in the `token` query param (QWebSocket cannot set handshake headers) and is
+  validated at the handshake by `_handshake_user` (decode → `type == "access"`
+  → `user_service.get_by_id` → active). Rejections must `websocket.close(1008)`
+  BEFORE `accept()` — `HTTPException` does not work in WS routes. Frames are
+  plain camelCase dicts via `send_json` (`response_model=` doesn't apply). The
+  push loop is per-connection (`asyncio.sleep(interval)`); without a concurrent
+  `receive()` a dead client is only reaped when the next send fails.
 
 ## Status-code semantics (keep consistent)
 

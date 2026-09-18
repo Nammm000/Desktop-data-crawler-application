@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core.notifications import NotificationClient
 from app.core.session import SessionController
 from app.ui.login_page import LoginPage
 from app.ui.main_page import MainPage
@@ -71,6 +72,15 @@ class MainWindow(QMainWindow):
         self._session.session_ended.connect(self._on_session_ended)
         self._session.auth_failed.connect(self._on_auth_failed)
         self._session.backend_warning.connect(self._login_page.show_warning)
+
+        self._notifications = NotificationClient(session, parent=self)
+        self._session.session_started.connect(lambda _user: self._notifications.start())
+        # Connected after _on_session_ended so main_page.reset() clears the
+        # notification list first (direct connections fire in connect order).
+        self._session.session_ended.connect(lambda _reason: self._notifications.stop())
+        self._notifications.notification_received.connect(
+            lambda n: self._main_page.add_notification(n.message, n.created_at)
+        )
 
     def _on_session_started(self, user) -> None:
         self._main_page.set_user(user)

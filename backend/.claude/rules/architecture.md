@@ -59,8 +59,9 @@ Mapping to response models happens only at the route boundary via
   `allow_credentials=False` (Bearer headers, not cookies), `allow_methods=["*"]`,
   `allow_headers=["*"]`.
 - **Routers**: `auth.router` (`/auth`, tag `auth`), `users.router` (`/users`, tag
-  `users`), and `agents.router` (`/agents`, tag `agents`), all mounted with
-  `prefix="/api/v1"`.
+  `users`), `agents.router` (`/agents`, tag `agents`), and `notifications.router`
+  (`/notifications`, tag `notifications` — one WebSocket endpoint), all mounted
+  with `prefix="/api/v1"`.
 - **Health**: `GET /api/health` (unversioned) pings Mongo and reports
   `{"status": "ok", "database": "up" | "down"}`.
 
@@ -84,9 +85,9 @@ app/
 ├── services/token_service.py # issue/rotate/revoke refresh tokens, reuse detection
 ├── services/agent_service.py # agent CRUD, _validate_script (json format check)
 └── api/
-    ├── deps.py               # bearer_scheme, DbDep, CurrentUser, AdminUser (admin guard)
+    ├── deps.py               # bearer_scheme, DbDep, WsDbDep, CurrentUser, AdminUser (admin guard)
     └── routes/               # auth.py (5 endpoints), users.py (GET /users/me + 5 admin endpoints),
-│                             # agents.py (5 agent endpoints, CurrentUser)
+│                             # agents.py (5 agent endpoints, CurrentUser), notifications.py (1 WS endpoint)
 ```
 
 ## Token architecture
@@ -233,7 +234,8 @@ claim.
 ## Dependency injection (`app/api/deps.py`, `app/core/config.py`)
 
 - `DbDep` — `Annotated[AsyncIOMotorDatabase, Depends(get_db)]`; `get_db` returns
-  `request.app.state.mongo_db`.
+  `request.app.state.mongo_db`. `WsDbDep` is the WebSocket twin (`get_db_ws` reads
+  `websocket.app.state.mongo_db` — `Request` is not injectable in WS routes).
 - `CurrentUser` — `Annotated[dict, Depends(get_current_user)]`; returns the fresh user
   doc for any authenticated-user endpoint.
 - `AdminUser` — `Annotated[dict, Depends(get_current_admin)]`; 403 "Admin

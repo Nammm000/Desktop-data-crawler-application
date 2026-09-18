@@ -338,6 +338,37 @@ class SessionController(QObject):
 
         run_async(work, on_success or (lambda _none: None), on_error or (lambda _exc: None))
 
+    # -- notification stream ---------------------------------------------------
+
+    @property
+    def client(self) -> ApiClient:
+        """Read-only handle for URL derivation (websocket_url); no requests."""
+        return self._client
+
+    def current_access_token(self) -> str | None:
+        """Thread-safe read of the in-memory access token (None while signed out)."""
+        with self._lock:
+            return self._access_token
+
+    def refresh_access_token(
+        self,
+        on_success: Callable[[str], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        """Force one single-flight token rotation (WebSocket reconnect path).
+        A 401 refresh failure force-logs-out (dead refresh token); transport
+        failures do not — the reconnect timer just retries later."""
+
+        def work() -> str:
+            try:
+                return self._rotate_tokens()
+            except ApiError as exc:
+                if exc.status_code == 401:
+                    self._force_logout()
+                raise
+
+        run_async(work, on_success or (lambda _token: None), on_error or (lambda _exc: None))
+
     # -- token plumbing (worker threads) ------------------------------------
 
     def _apply_pair(self, pair: TokenPair) -> None:

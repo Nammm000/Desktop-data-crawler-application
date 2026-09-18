@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import quote
 
 import requests
 
@@ -68,6 +69,12 @@ class Agent:
 class AgentPage:
     agents: tuple[Agent, ...]
     total: int
+
+
+@dataclass(frozen=True)
+class Notification:
+    message: str
+    created_at: datetime | None
 
 
 def _parse_timestamp(raw) -> datetime | None:
@@ -130,6 +137,17 @@ def _parse_agent_page(data: dict) -> AgentPage:
 
 def _parse_deleted_count(data: dict) -> int:
     return int(data["deleted"])
+
+
+def parse_notification(data: dict) -> Notification | None:
+    """WebSocket frame -> Notification; None for control frames ({"type":
+    "connected"} and anything unrecognized)."""
+    if not isinstance(data, dict) or data.get("type") != "notification":
+        return None
+    return Notification(
+        message=str(data.get("message") or ""),
+        created_at=_parse_timestamp(data.get("createdAt")),
+    )
 
 
 def _parse_or_fail(payload, parser):
@@ -211,6 +229,17 @@ class ApiClient:
 
     def health(self) -> dict:
         return self._request("GET", "/api/health") or {}
+
+    def websocket_url(self, token: str) -> str:
+        """ws:// (wss:// behind https) URL of the notification stream; the
+        access token rides in the query string (QWebSocket cannot set
+        handshake headers)."""
+        base = self.base_url
+        if base.startswith("https://"):
+            base = "wss://" + base[len("https://"):]
+        else:
+            base = "ws://" + base.removeprefix("http://")
+        return f"{base}/api/v1/notifications/ws?token={quote(token, safe='')}"
 
     def signup(self, *, username: str, email: str, password: str) -> User:
         payload = self._request(

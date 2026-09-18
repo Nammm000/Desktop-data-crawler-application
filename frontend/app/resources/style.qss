@@ -106,6 +106,32 @@ QPushButton#accountButton:pressed {
     border-color: #E2E4EA;
 }
 
+QPushButton#notificationButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+}
+QPushButton#notificationButton:hover {
+    background-color: #F3F4F6;
+    border-color: #E2E4EA;
+}
+QPushButton#notificationButton:pressed {
+    background-color: #E9EBF0;
+}
+QPushButton#notificationButton[unread="true"] {
+    background-color: #EEF2FF;
+    border-color: #C7D2FE;
+}
+QPushButton#notificationButton[unread="true"]:hover {
+    background-color: #E0E7FF;
+    border-color: #C7D2FE;
+}
+
 /* --- Login card ------------------------------------------------------------ */
 
 QFrame#loginCard {
@@ -164,23 +190,29 @@ QFrame#header {
     border-bottom: 1px solid #E2E4EA;
 }
 
-QMenu#accountMenu {
+QMenu#accountMenu,
+QMenu#notificationMenu {
     background-color: #FFFFFF;
     border: 1px solid #E2E4EA;
     border-radius: 8px;
     padding: 4px;
 }
-QMenu#accountMenu::item {
+QMenu#accountMenu::item,
+QMenu#notificationMenu::item {
     border-radius: 6px;
     padding: 6px 24px 6px 12px;
     color: #1F2430;
 }
-QMenu#accountMenu::item:selected {
+QMenu#accountMenu::item:selected,
+QMenu#notificationMenu::item:selected {
     background-color: #EEF2FF;
     color: #4F46E5;
 }
 QMenu#accountMenu::item:disabled {
     color: #9CA3AF;
+}
+QMenu#notificationMenu::item:disabled {
+    color: #4B5563;  /* entries are informational text, not grayed-out actions */
 }
 
 /* --- Management tables (users, agents) --------------------------------------- */

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, Signal
@@ -20,6 +22,7 @@ from app.api.client import User
 from app.core.session import SessionController
 from app.ui.agent_management_page import AgentManagementPage
 from app.ui.dashboard_page import DashboardPage
+from app.ui.format import format_time
 from app.ui.settings_page import SettingsPage
 from app.ui.user_management_page import UserManagementPage
 
@@ -45,6 +48,10 @@ class MainPage(QWidget):
         self._agents_nav = QPushButton(
             "Agents", objectName="navButton", checkable=True
         )
+        self._notification_button = QPushButton(objectName="notificationButton")
+        self._notification_button.setIcon(QIcon(str(_ICONS_DIR / "bell.svg")))
+        self._notification_button.setToolTip("Notifications")
+        self._notification_button.clicked.connect(self._open_notification_menu)
         self._account_button = QPushButton(objectName="accountButton")
         self._account_button.setIcon(QIcon(str(_ICONS_DIR / "chevron-down.svg")))
         self._account_button.clicked.connect(self._open_account_menu)
@@ -52,6 +59,7 @@ class MainPage(QWidget):
         header_layout.addWidget(self._dashboard_nav)
         header_layout.addWidget(self._agents_nav)
         header_layout.addStretch(1)
+        header_layout.addWidget(self._notification_button)
         header_layout.addWidget(self._account_button)
 
         # Body pages.
@@ -73,6 +81,8 @@ class MainPage(QWidget):
         self._body.currentChanged.connect(self._on_body_page_changed)
         self._dashboard_nav.setChecked(True)
 
+        self._notifications: deque[tuple[str, datetime | None]] = deque(maxlen=20)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -89,6 +99,8 @@ class MainPage(QWidget):
     def reset(self) -> None:
         """Clear session data; the next login may be a different user."""
         self._account_button.setText("")
+        self._notifications.clear()
+        self._set_unread(False)
         self._dashboard_page.set_user(None)
         self._settings_page.set_user(None)
         self._agent_management_page.clear()
@@ -122,6 +134,34 @@ class MainPage(QWidget):
         menu.addAction("Log out", self.logout_requested.emit)
         position = self._account_button.mapToGlobal(
             QPoint(0, self._account_button.height())
+        )
+        menu.exec(position)
+
+    # -- notifications ---------------------------------------------------------
+
+    def add_notification(self, message: str, created_at: datetime | None) -> None:
+        """Record a notification (oldest first, capped at 20) and flag unread."""
+        self._notifications.append((message, created_at))
+        self._set_unread(True)
+
+    def _set_unread(self, unread: bool) -> None:
+        button = self._notification_button
+        button.setProperty("unread", unread)
+        button.style().unpolish(button)
+        button.style().polish(button)
+
+    def _open_notification_menu(self) -> None:
+        self._set_unread(False)
+        menu = QMenu(objectName="notificationMenu", parent=self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        if self._notifications:
+            for message, created_at in reversed(self._notifications):
+                text = f"{message} · {format_time(created_at)}" if created_at else message
+                menu.addAction(text).setEnabled(False)
+        else:
+            menu.addAction("No notifications").setEnabled(False)
+        position = self._notification_button.mapToGlobal(
+            QPoint(0, self._notification_button.height())
         )
         menu.exec(position)
 

@@ -11,6 +11,13 @@ def format_date(value: datetime | None) -> str:
     return value.strftime("%d %b %Y")
 
 
+def format_time(value: datetime | None) -> str:
+    """Local-time HH:MM (notification menu entries)."""
+    if value is None:
+        return ""
+    return value.astimezone().strftime("%H:%M")
+
+
 def format_role(role: str) -> str:
     return role.capitalize() if role else "—"
 

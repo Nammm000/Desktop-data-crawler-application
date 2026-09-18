@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     bcrypt_rounds: int = 12
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    notification_interval_seconds: int = 900
 
     @property
     def cors_origins_list(self) -> list[str]:

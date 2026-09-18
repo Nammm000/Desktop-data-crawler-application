@@ -34,9 +34,10 @@ thread via queued signals — workers never touch widgets.
 
 ```
 app/
-├── api/client.py               # ApiClient: all 16 endpoints, camelCase JSON, ApiError
+├── api/client.py               # ApiClient: all 16 endpoints, camelCase JSON, ApiError; websocket_url + parse_notification
 ├── core/worker.py              # run_async(): pool threads -> queued signals (GUI thread)
 ├── core/session.py             # SessionController: tokens, refresh, QSettings, forced logout
+├── core/notifications.py       # NotificationClient: QWebSocket stream + 5 s reconnect (GUI thread)
 ├── ui/widgets.py               # PasswordLineEdit, chosen_combo (macOS-safe combos)
 ├── ui/login_page.py            # centered Sign in / Create account card (no header)
 ├── ui/dashboard_page.py        # placeholder text + admin-only User management card
@@ -46,12 +47,12 @@ app/
 ├── ui/change_password_dialog.py  # modal dialog (3 PasswordLineEdit fields)
 ├── ui/agent_dialog.py          # modal Add/Edit agent form (script editor is the source of truth; json adds key-value rows + Generate JSON)
 ├── ui/confirm_dialog.py        # ConfirmDialog.ask(): styled yes/no card (danger variant)
-├── ui/format.py                # format_date / format_role / format_status
-├── ui/main_page.py             # header (Dashboard + Agents nav left, account email menu right)
-├── ui/main_window.py           # QMainWindow: Loading / Login / Main stack
+├── ui/format.py                # format_date / format_role / format_status / format_time
+├── ui/main_page.py             # header (Dashboard + Agents nav left, bell + account email menu right)
+├── ui/main_window.py           # QMainWindow: Loading / Login / Main stack; owns NotificationClient
 └── resources/
     ├── style.qss               # the only stylesheet (objectName selectors)
-    └── icons/                  # eye, eye-off, chevron-down, trash, check, plus, edit, plus-neutral, minus-neutral (.svg)
+    └── icons/                  # eye, eye-off, chevron-down, trash, check, plus, edit, plus-neutral, minus-neutral, bell (.svg)
 ```
 
 ## Golden Rules
@@ -62,7 +63,9 @@ app/
   `SessionController._rotate_tokens`; never replay a refresh token (revokes the family)
 - 401 → refresh once → retry once → forced logout if that fails
 - camelCase JSON lives only in `app/api/client.py`; everything else sees `User` /
-  `TokenPair` / `UserPage` / `Agent` / `AgentPage`
+  `TokenPair` / `UserPage` / `Agent` / `AgentPage` / `Notification`
+  (WS frames parse via `parse_notification`; `websocket_url(token)` builds the
+  stream URL with the access token in the query string)
 - Client validation mirrors the backend (username 3–32 `^[a-zA-Z0-9_.-]+$`,
   password 8–64 chars / ≤72 UTF-8 bytes, email format; agent name 1–100 chars
   stripped, script 1–1,000,000 chars — the script editor's text is submitted
@@ -74,6 +77,12 @@ app/
   Settings + Log out live in the account menu behind the email button. The
   User management entry is admin-only (Dashboard card gated on
   `user.role == "admin"`)
+- A bell button (`#notificationButton`) sits left of the account button:
+  pushed notifications land in `QMenu#notificationMenu` (newest-first, capped
+  at 20, `· HH:MM` via `format_time`), unread state via the `[unread="true"]`
+  QSS attribute + repolish. `NotificationClient` (QWebSocket, GUI thread, 5 s
+  reconnect, refresh-on-handshake-rejection) is owned by `MainWindow` and
+  started/stopped by `session_started` / `session_ended`
 - Admin role/status edits go through the per-row combos in
   `UserManagementPage`; the current user's own row is plain text (the backend
   rejects self-changes)

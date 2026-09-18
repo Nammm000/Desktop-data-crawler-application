@@ -28,6 +28,7 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
 | email-validator | 2.3.0 |
 | PyJWT | 2.14.0 |
 | bcrypt (direct, never passlib) | 5.0.0 |
+| websockets (uvicorn WS protocol) | 17.1 |
 | MongoDB | 8.0 via Docker (`mongo:8.0`) |
 
 ## Features
@@ -43,6 +44,8 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
   immediately), role changes, account deletion (single + bulk, cascades refresh tokens)
 - Agent CRUD (any authenticated user): crawler definitions with a raw json/xml/md
   script, unique names, JSON scripts validated on create and on the merged update view
+- Notification WebSocket (any active user, temporary): auth-at-handshake stream that
+  pushes a placeholder message ("15 minutes have passed") on a timer
 - Health check with database status
 
 ## API surface
@@ -68,6 +71,7 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 | GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` "Agent not found" |
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
+| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` per interval | handshake rejection (close 1008 → HTTP 403) |
 | GET | `/api/health` | — | — | `200 {"status":"ok","database":"up"\|"down"}` | — |
 
 ### Response shapes
@@ -157,6 +161,7 @@ Query params for `GET /agents` mirror `GET /users`.
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | refresh-token lifetime |
 | `BCRYPT_ROUNDS` | `12` | bcrypt cost factor |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | comma-separated allowed origins (frontend dev servers) |
+| `NOTIFICATION_INTERVAL_SECONDS` | `900` | notification push interval over the WS stream (tests shorten it) |
 
 ## Getting started
 
@@ -177,7 +182,7 @@ backend/
 │   ├── main.py                   # FastAPI app: lifespan, CORS, routers, /api/health
 │   ├── api/
 │   │   ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser
-│   │   └── routes/               # auth.py, users.py, agents.py (5 endpoints, CurrentUser)
+│   │   └── routes/               # auth.py, users.py, agents.py (5 endpoints, CurrentUser), notifications.py (1 WS endpoint)
 │   ├── core/                     # config.py (settings), security.py (bcrypt/JWT/token utils)
 │   ├── db/mongo.py               # Motor lifecycle, ensure_indexes(), get_db
 │   ├── models/user.py            # UserRole, UserStatus, collection-name constants

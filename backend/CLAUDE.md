@@ -45,7 +45,7 @@ app/
 ├── services/agent_service.py # agent CRUD, script JSON validation
 └── api/
     ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser
-    └── routes/               # auth.py (5 auth endpoints), users.py (GET /users/me), agents.py (5 agent endpoints)
+    └── routes/               # auth.py (5 auth endpoints), users.py (GET /users/me), agents.py (5 agent endpoints), notifications.py (1 WS endpoint)
 ```
 
 ## Golden Rules

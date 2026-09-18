@@ -72,6 +72,7 @@ All routes are prefixed with `/api/v1`. JSON uses camelCase
 | GET | `/agents/{agentId}` | Bearer | — | `200` `AgentOut` | `401`, `404` |
 | PATCH | `/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200` `AgentOut` | `400` invalid JSON script, `409` dup name, `404`, `422` |
 | DELETE | `/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
+| WS | `/notifications/ws?token=<accessToken>` | query token | — | ack `{"type":"connected"}`, then a `{"type":"notification","message","createdAt"}` frame every `NOTIFICATION_INTERVAL_SECONDS` (default 900) | handshake rejected with close code 1008 (invalid/expired token, inactive user) |
 
 `UserOut`: `{id, username, email, role, status, createdAt}` — `passwordHash` is
 never exposed. `role` is `admin` or `user`; `status` is a plain string
@@ -141,6 +142,16 @@ curl -s "$BASE/agents?limit=20&skip=0" -H "Authorization: Bearer <accessToken>"
 curl -s -X PATCH $BASE/agents/<agentId> -H "Authorization: Bearer <accessToken>" \
   -H 'Content-Type: application/json' -d '{"name":"renamed-agent"}'
 curl -s -X DELETE $BASE/agents/<agentId> -H "Authorization: Bearer <accessToken>"
+
+# Notification stream (WebSocket; temporary 15-min placeholder push).
+# Shorten the interval for testing: NOTIFICATION_INTERVAL_SECONDS=3 uvicorn ...
+.venv/bin/python -c "
+import asyncio, websockets
+async def main():
+    async with websockets.connect('ws://localhost:8000/api/v1/notifications/ws?token=<accessToken>') as ws:
+        print(await ws.recv())  # {\"type\": \"connected\"}
+        print(await ws.recv())  # first notification
+asyncio.run(main())"
 ```
 
 ## Project Structure
@@ -159,7 +170,7 @@ app/
 ├── services/agent_service.py# Agent CRUD + script JSON validation
 └── api/
     ├── deps.py              # get_current_user / get_current_admin dependencies
-    └── routes/              # auth.py, users.py, agents.py (5 agent endpoints)
+    └── routes/              # auth.py, users.py, agents.py (5 agent endpoints), notifications.py (1 WS endpoint)
 ```
 
 ## MongoDB

@@ -25,6 +25,7 @@ globs: ["app/api/**"]
 | `create_agent()` | `POST /api/v1/agents` | Bearer | `{name, format, script}` | `201 Agent` | `409` dup name, `400` invalid JSON script, `422` |
 | `update_agent()` | `PATCH /api/v1/agents/{id}` | Bearer | `{name?, format?, script?}` (partial) | `Agent` | `409` dup name, `400` JSON check on merged script, `404`, `422` |
 | `delete_agent()` | `DELETE /api/v1/agents/{id}` | Bearer | — | `None` (204, empty body) | `404` |
+| `websocket_url(token)` | `WS /api/v1/notifications/ws?token=` | access token in query | — | `ws://`/`wss://` URL string | handshake rejection (close 1008) |
 
 ## Conventions
 
@@ -49,6 +50,12 @@ globs: ["app/api/**"]
 - Every request goes through the shared `requests.Session` with the standard
   timeout (10 s) so busy states on buttons can never wedge.
 - Base URL resolution: constructor arg → `DATA_CRAWLER_API_URL` → `http://localhost:8000`.
+- The notification WebSocket keeps its wire format here too:
+  `websocket_url(token)` derives the `ws://` URL from `base_url` (token in the
+  query string — QWebSocket cannot set handshake headers), and
+  `parse_notification(dict)` turns frames into `Notification(message,
+  created_at)`, returning `None` for control frames (`{"type": "connected"}`)
+  so the client never shows them.
 
 ## Errors
 

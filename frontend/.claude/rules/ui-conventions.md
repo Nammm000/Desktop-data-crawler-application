@@ -14,7 +14,15 @@ globs: ["app/ui/**", "app/resources/**"]
 - LoginPage: centered card, no header, ever. MainPage owns the only header —
   nav (`Dashboard`, `Agents`) left, account button (user email + chevron)
   right. The account button opens a `QMenu` (`#accountMenu`) with Settings
-  and Log out; there is no standalone logout button.
+  and Log out; there is no standalone logout button. A bell button
+  (`QPushButton#notificationButton`, 28×28, bell.svg) sits between the
+  stretch and the account button: `add_notification()` appends to a 20-entry
+  deque and sets the `unread` dynamic property (QSS `[unread="true"]` indigo
+  tint; repolish via `style().unpolish/polish`); clicking clears unread and
+  opens `QMenu#notificationMenu` listing newest-first disabled actions
+  (`message · HH:MM` via `format_time`, plain message when there is no
+  timestamp; "No notifications" when empty). `reset()` clears the list and
+  the unread flag.
 - MainPage's body stack: DashboardPage / AgentManagementPage / SettingsPage /
   UserManagementPage. Each nav button is checked only while its page is
   current.
