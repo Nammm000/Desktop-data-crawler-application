@@ -27,9 +27,11 @@ Checklist before finishing any change (covers every endpoint):
 - Cold start (no stored token) → centered login card, no header
 - Eye icon hides/shows the password on both forms
 - Invalid input (short/bad-char username, 7-char or >72-byte password) blocks submit
-- Sign up → main screen; email top-right; nav switches the two placeholders
+- Sign up → main screen; email top-right; lands on the Agents page (Dashboard
+  nav shows the placeholder page)
 - Duplicate email/username → backend message in the error banner
-- Quit + relaunch → loading → straight to main (silent refresh + `/users/me`)
+- Quit + relaunch → loading → straight to main on Agents (silent refresh +
+  `/users/me`)
 - Log out → login page; stored token cleared; relaunch stays on login
 - Backend down → amber warning banner, app still usable
 - Header: Dashboard + Agents nav (both for every user); email button opens the
@@ -47,8 +49,9 @@ Checklist before finishing any change (covers every endpoint):
   the combo; limit selector resets to page 1; Previous/Next respect bounds;
   `Page X of Y` matches `total`
 - User management deletes (admin): per-row trash button → styled confirm card,
-  Cancel leaves the row intact, confirm removes it and updates the `N users`
-  subtitle; row checkboxes drive `Delete selected (N)` (bulk) and Select all
+  Cancel leaves the row intact, confirm removes it and updates the "of N"
+  count beside the limit selector; row checkboxes drive `Delete selected (N)`
+  (bulk) and Select all
   never touches the own row (no checkbox/trash there, tooltip present);
   deleted user's next login fails; deleting every row of the last page clamps
   the page index (no empty "Page 2 of 1"); a delete in flight disables the
@@ -56,9 +59,14 @@ Checklist before finishing any change (covers every endpoint):
   backend is down → banner + resync, UI never wedges; deleting an
   already-removed user (second admin/curl) → "User not found" banner + resync
 - Agents (all users, incl. non-admin): Agents nav checks/unchecks in sync with
-  Dashboard and re-entering the page reloads it; table newest-first; `N agents`
-  subtitle; the script never appears in the table; limit selector resets to
+  Dashboard and re-entering the page reloads it; table newest-first; "of N"
+  count beside the limit selector (no count subtitle); the script never
+  appears in the table; limit selector resets to
   page 1; Previous/Next respect bounds; `Page X of Y` matches `total`
+- Agents page divider: the "Add agent" button sits top-right beside the
+  "Agent management" title; the splitter handle between the agents section
+  and the data section drags to reallocate their heights (line turns indigo
+  on hover; neither pane collapses fully; the split survives page switches)
 - Add agent: empty name, empty script (any format), >100-char name, and a
   text-mode script over 1,000,000 chars blocked client-side (no request
   sent); success closes the dialog immediately and lands on page 1 with the
@@ -93,7 +101,8 @@ Checklist before finishing any change (covers every endpoint):
   banner; agent deleted via curl → "Agent not found" + resync; Completed /
   Failed statuses appear on page re-entry (no live updates by design)
 - Agent data section: clicking an agent name (indigo underlined) → the
-  section appears with `Data from <name> · N records`; URL / Fields
+  section appears (subtitle goes blank) with its own "of N" count beside
+  the data limit selector (no "Agent data" heading anywhere); URL / Fields
   (single-line JSON, `null` for unmatched XPaths, "—" when empty) /
   Crawled columns; a different name → its page 1; the same name again →
   refetch; re-entering the page refreshes the data; limit selector resets to
@@ -103,12 +112,13 @@ Checklist before finishing any change (covers every endpoint):
   pretty monospace JSON); Close and Esc dismiss; the text is
   selectable/copyable but not editable; "—" cells are plain and do nothing
   on click; a fetch/delete in flight disables the table (no mid-flight click)
-- Agent data Hide/Show: the Hide button right of the "Agent data" title
-  (only present with a selection) collapses bulk bar + table + pagination
-  while the title/subtitle/banner/progress stay; Show restores it; clicking
+- Agent data Hide/Show: the Hide button in the data bulk bar (next to
+  "Delete selected", only reachable with a selection) collapses the table +
+  pagination while the subtitle/banner/progress/bulk bar stay visible (so
+  the flipped "Show" button stays clickable); Show restores it; clicking
   an agent name while collapsed re-expands (button reads "Hide"); the
   data-list 404 / deleting the selected agent / logout reset the section,
-  hide the button, and clear the collapse state
+  hide the bulk bar + table, and clear the collapse state
 - Agent data deletes: per-row trash → confirm card; Cancel keeps the row;
   checkboxes drive `Delete selected (N)`; Select all syncs; deleting every
   row of the last page clamps the page index; backend down → banner + resync;

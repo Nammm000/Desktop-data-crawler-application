@@ -29,7 +29,7 @@ from app.ui.widgets import chosen_combo
 
 _ICONS_DIR = Path(__file__).resolve().parent.parent / "resources" / "icons"
 
-_LIMIT_CHOICES = (10, 25, 50, 100)
+_LIMIT_CHOICES = (5, 10, 25, 50, 100)
 _DEFAULT_LIMIT = 25
 
 _ROLE_ITEMS = (("User", "user"), ("Admin", "admin"))
@@ -69,7 +69,6 @@ class UserManagementPage(QWidget):
         # Row index -> user id for the currently rendered page.
         self._row_user_ids: list[str] = []
 
-        self._subtitle = QLabel("—", objectName="pageSubtitle")
         self._error_banner = QLabel(objectName="errorBanner", wordWrap=True)
         self._error_banner.hide()
         self._progress = QProgressBar()
@@ -119,6 +118,9 @@ class UserManagementPage(QWidget):
         )
         self._limit_selector.currentIndexChanged.connect(self._on_limit_changed)
 
+        # Row count lives here next to the selector, not in a subtitle label.
+        self._count_label = QLabel("—", objectName="pageIndicator")
+
         self._prev_button = QPushButton("Previous", objectName="pageButton")
         self._prev_button.clicked.connect(self._go_previous)
         self._next_button = QPushButton("Next", objectName="pageButton")
@@ -135,6 +137,7 @@ class UserManagementPage(QWidget):
         pagination.setSpacing(8)
         pagination.addWidget(QLabel("Rows per page", objectName="fieldCaption"))
         pagination.addWidget(self._limit_selector)
+        pagination.addWidget(self._count_label)
         pagination.addStretch(1)
         pagination.addWidget(self._prev_button)
         pagination.addWidget(self._page_indicator)
@@ -144,7 +147,6 @@ class UserManagementPage(QWidget):
         root.setContentsMargins(32, 24, 32, 24)
         root.setSpacing(12)
         root.addWidget(QLabel("User management", objectName="pageTitle"))
-        root.addWidget(self._subtitle)
         root.addWidget(self._error_banner)
         root.addWidget(self._progress)
         root.addLayout(bulk_bar)
@@ -177,7 +179,7 @@ class UserManagementPage(QWidget):
         self._preserve_banner = False
         self._error_banner.hide()
         self._table.setRowCount(0)
-        self._subtitle.setText("—")
+        self._count_label.setText("—")
         self._page_indicator.setText("—")
         self._prev_button.setEnabled(False)
         self._next_button.setEnabled(False)
@@ -204,7 +206,8 @@ class UserManagementPage(QWidget):
             self._preserve_banner = False
         else:
             self._error_banner.hide()
-        self._subtitle.setText(f"{self._total} users")
+
+        self._count_label.setText(f" {self._total} rows")
         self._populate(page.users)
         self._sync_pagination(page_count)
 
@@ -218,7 +221,7 @@ class UserManagementPage(QWidget):
         self._table.setRowCount(0)
         self._row_user_ids = []
         self._sync_bulk_state()
-        self._subtitle.setText("—")
+        self._count_label.setText("—")
         self._page_indicator.setText("—")
         self._prev_button.setEnabled(False)
         self._next_button.setEnabled(False)

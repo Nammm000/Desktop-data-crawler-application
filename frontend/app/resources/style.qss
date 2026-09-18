@@ -371,6 +371,24 @@ QPushButton#dangerButton:disabled {
 
 /* --- Agent management ------------------------------------------------------ */
 
+/* Draggable divider between the agents table and the agent-data section.
+   The 14px handle is the grab area; a 1px top border draws the visible
+   line, which turns indigo with a light band on hover. (QSS margins on
+   splitter handles misrender — don't retry that trick.) */
+QSplitter#agentsSplitter {
+    background-color: transparent;
+}
+QSplitter#agentsSplitter::handle {
+    background-color: transparent;
+    border: none;
+    border-top: 1px solid #E2E4EA;
+    height: 14px;
+}
+QSplitter#agentsSplitter::handle:hover {
+    background-color: #EEF2FF;
+    border-top: 1px solid #4F46E5;
+}
+
 QPushButton#rowEditButton {
     background-color: transparent;
     border: 1px solid transparent;
@@ -551,11 +569,6 @@ QLabel#pageSubtitle {
 }
 QLabel#pageIndicator {
     color: #6B7280;
-}
-QLabel#sectionTitle {
-    font-size: 16px;
-    font-weight: 700;
-    color: #374151;
 }
 QLabel#profileValue {
     font-weight: 500;

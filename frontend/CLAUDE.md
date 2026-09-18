@@ -42,7 +42,7 @@ app/
 ├── ui/login_page.py            # centered Sign in / Create account card (no header)
 ├── ui/dashboard_page.py        # placeholder text + admin-only User management card
 ├── ui/settings_page.py         # profile card + Change password button
-├── ui/agent_management_page.py # all users: paginated agent table, add/edit/delete/run + per-agent data table
+├── ui/agent_management_page.py # all users: landing page — splitter-stacked agent table (add/edit/delete/run) + per-agent data table
 ├── ui/user_management_page.py  # admin: paginated user table, role/status combos, delete
 ├── ui/change_password_dialog.py  # modal dialog (3 PasswordLineEdit fields)
 ├── ui/agent_dialog.py          # modal Add/Edit agent form (script editor is the source of truth; json adds key-value rows + Generate JSON)
@@ -78,7 +78,9 @@ app/
 - The header nav is Dashboard + Agents, both for every authenticated user;
   Settings + Log out live in the account menu behind the email button. The
   User management entry is admin-only (Dashboard card gated on
-  `user.role == "admin"`)
+  `user.role == "admin"`). Every session start (login, sign-up, silent
+  refresh) lands on the Agents page — `MainPage.set_user` switches there and
+  reloads it; `reset()` preselects it for the next login
 - A bell button (`#notificationButton`) sits left of the account button:
   pushed notifications land in `QMenu#notificationMenu` (newest-first, capped
   at 20, `· HH:MM` via `format_time`), unread state via the `[unread="true"]`
@@ -97,18 +99,28 @@ app/
   the script never renders in the table (up to 1 MB) — the dialog owns it.
   Agent deletes confirm via `ConfirmDialog.ask(..., danger=True)` and run one
   at a time; an accepted create resets the page to page 1 (newest-first)
+- AgentManagementPage layout: the "Add agent" primaryButton sits right of
+  the "Agent management" pageTitle (no toolbar row); the agents table and
+  the data section stack in a vertical `#agentsSplitter` — drag the handle
+  to reallocate height (panes never collapse; a one-shot `showEvent` seeds
+  the old 3:2 split). There is no "Agent data" section title — the data
+  section's `#pageSubtitle` shows only the empty-state caption (it blanks
+  once an agent is selected). Row counts render as "of N" beside every
+  `#limitSelector`; no "N users / N agents / N records" count subtitles
 - A per-row Run button (no confirm; `#rowRunButton` play.svg) starts the
   agent's crawl — 202 on a GET-with-side-effects — and reloads the table
   (status flips to Running, button disables); 409/400/404 land in the banner
-  verbatim. Clicking an agent name (indigo link) selects it: the bottom
-  `#dataTable` shows its crawled records (own banner/progress/bulk
-  bar/pagination, busy flags independent of the agents section) with per-row
-  + checkbox bulk deletes (confirm, danger, one in flight); a data-list 404
-  or deleting the selected agent clears the section. Fields cells are
-  indigo links opening a read-only `AgentDataDialog` ("—" cells are inert);
-  a `#pageButton` Hide/Show next to the "Agent data" title collapses
-  `_data_body` (button only visible with a selection; a name click always
-  re-expands; clearing the section resets it)
+  verbatim. Clicking an agent name (indigo link) selects it: the lower
+  splitter pane's `#dataTable` shows its crawled records (own
+  banner/progress/bulk bar/pagination, busy flags independent of the agents
+  section) with per-row + checkbox bulk deletes (confirm, danger, one in
+  flight); a data-list 404 or deleting the selected agent clears the
+  section. Fields cells are indigo links opening a read-only
+  `AgentDataDialog` ("—" cells are inert); the `#pageButton` Hide/Show sits
+  in the data bulk bar next to "Delete selected" and collapses only the
+  table + pagination (`_data_collapsible`) so the bulk bar — and the Show
+  button — stay visible; a name click always re-expands; clearing the
+  section resets it
 - Styling only via `app/resources/style.qss` — no `setStyleSheet` in code;
   QSS `image:` urls use the `%icons%` placeholder, substituted with the
   absolute icons path in `main.py` (QSS resolves urls against the CWD)

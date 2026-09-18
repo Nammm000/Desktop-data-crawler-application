@@ -25,7 +25,9 @@ globs: ["app/ui/**", "app/resources/**"]
   the unread flag.
 - MainPage's body stack: DashboardPage / AgentManagementPage / SettingsPage /
   UserManagementPage. Each nav button is checked only while its page is
-  current.
+  current. Every session opens on AgentManagementPage — `set_user` switches
+  there and reloads it (the explicit reload covers an already-current page),
+  and `reset()` preselects it for the next login.
 - DashboardPage always shows `This is the Dashboard page`; an admin
   (`user.role == "admin"`) additionally gets the User management card, which
   is the only entry point to UserManagementPage.
@@ -46,9 +48,10 @@ globs: ["app/ui/**", "app/resources/**"]
   (`app/ui/confirm_dialog.py`) first; one delete in flight at a time,
   mutually exclusive with a pending combo change; success → `reload()` (the
   shrink-refetch clamps an emptied last page), error → banner + `reload()`.
-  Pagination: `QComboBox#limitSelector` (10/25/50/100), Previous/Next,
-  `Page X of Y`; changing the limit resets to page 1; one role/status change
-  in flight at a time, reverting the combo if the server refuses.
+  Pagination: `QComboBox#limitSelector` (10/25/50/100), a `#pageIndicator`
+  "of N" row count right of the selector, Previous/Next, `Page X of Y`;
+  changing the limit resets to page 1; one role/status change in flight at a
+  time, reverting the combo if the server refuses.
 - AgentManagementPage (every authenticated user): `QTableWidget#agentsTable`
   with 9 columns — Name (the Stretch column, rendered as an indigo underlined
   link via item font/foreground — QSS cannot reach items; `cellClicked`
@@ -59,15 +62,21 @@ globs: ["app/ui/**", "app/resources/**"]
   dialog: success and failure both `reload()` (the row flips to `Running`);
   the button disables with an "already running" tooltip while status is
   `Running`; 409/400/404 land in the banner verbatim. The script is never a
-  column (up to 1,000,000 chars) — the dialog owns it. A toolbar row holds
-  the `primaryButton` "Add agent" (plus.svg); every delete passes
+  column (up to 1,000,000 chars) — the dialog owns it. The `primaryButton`
+  "Add agent" (plus.svg) sits at the right of the "Agent management"
+  `pageTitle` row — no toolbar row. The page splits vertically:
+  `QSplitter#agentsSplitter` (children not collapsible, 3:2 stretch factors,
+  one-shot `showEvent` seeding the initial split) stacks the agents section
+  above the data section; its QSS handle paints a 1px top-border line on a
+  14px grab area (indigo on hover). Every delete passes
   `ConfirmDialog.ask(..., danger=True)`; one delete in flight at a time;
   success → `reload()` (clamps an emptied last page), error → banner +
   `reload()`; deleting the selected agent clears the data section (the data
   list endpoint 404s once the agent is gone). Pagination matches the users
   page; an accepted create resets to page 1 (newest-first), an accepted edit
   reloads the current page.
-- Agent data section (bottom of AgentManagementPage): `QTableWidget#dataTable`
+- Agent data section (lower pane of the `#agentsSplitter` on
+  AgentManagementPage): `QTableWidget#dataTable`
   with 5 columns — checkbox, URL (Stretch, full URL in the tooltip), Fields
   (single-line `json.dumps` elided by the table; a non-empty cell is an
   indigo underlined link via item font/foreground — QSS cannot reach items —
@@ -75,12 +84,14 @@ globs: ["app/ui/**", "app/resources/**"]
   read-only `AgentDataDialog` via `self._data_rows[row]` (the AgentData
   object list that also feeds bulk deletes); "—" when empty, plain and
   inert), Crawled, and a per-row trash button. Hidden inside `_data_body`
-  until an agent is selected; before that a `#sectionTitle` "Agent data" +
-  `#pageSubtitle` empty-state caption show. A `#pageButton` Hide/Show
-  (`_data_toggle_button`) sits right of the section title, visible only
-  while an agent is selected: it collapses/expands `_data_body`
-  (`_data_collapsed`); a name click always re-expands, and
-  `_clear_data_section` resets the flag and hides the button. Own
+  until an agent is selected; before that only the `#pageSubtitle`
+  empty-state caption shows — there is no section title (the subtitle
+  blanks once an agent is selected). The `#pageButton` Hide/Show
+  (`_data_toggle_button`) sits in the bulk bar next to "Delete selected":
+  it collapses only the table + pagination (`_data_collapsible`) so the
+  bulk bar — and the Show button — stay visible; a name click always
+  re-expands, and `_clear_data_section` resets the flag and hides
+  `_data_body` wholesale. Own
   banner/progress/bulk bar (`#selectAllCheckBox` + `#dangerButton` "Delete
   selected (N)")/pagination, and busy flags (`_data_loading`,
   `_pending_data_delete`) deliberately independent of the agents flags so
@@ -156,6 +167,9 @@ globs: ["app/ui/**", "app/resources/**"]
   because QSS resolves relative urls against the process CWD. Pure-QSS
   border-triangle arrows render as a dash — don't retry that trick.
 - QMenu rounded corners need `WA_TranslucentBackground` set in code.
+- QSplitter handles style via `::handle` in QSS; the `#agentsSplitter` handle
+  paints its line with `border-top` on a transparent 14px grab area — QSS
+  `margin` on splitter handles misrenders (ignores the height), don't retry it.
 - Combos use `chosen_combo()` from `app/ui/widgets.py` (Fusion style + accent
   delegate — QMacStyle squeezes the popup); `QPlainTextEdit` is styled via
   `#scriptEdit`. Dialog row mini-buttons are `#addRowButton`/`#removeRowButton`

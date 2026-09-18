@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -82,7 +83,6 @@ class AgentManagementPage(QWidget):
         # Row index -> Agent for the currently rendered page (name clicks).
         self._row_agents: list[Agent] = []
 
-        self._subtitle = QLabel("—", objectName="pageSubtitle")
         self._error_banner = QLabel(objectName="errorBanner", wordWrap=True)
         self._error_banner.hide()
         self._progress = QProgressBar()
@@ -129,21 +129,27 @@ class AgentManagementPage(QWidget):
         )
         self._limit_selector.currentIndexChanged.connect(self._on_limit_changed)
 
+        # Row count lives here next to the selector, not in a subtitle label.
+        self._count_label = QLabel("—", objectName="pageIndicator")
+
         self._prev_button = QPushButton("Previous", objectName="pageButton")
         self._prev_button.clicked.connect(self._go_previous)
         self._next_button = QPushButton("Next", objectName="pageButton")
         self._next_button.clicked.connect(self._go_next)
         self._page_indicator = QLabel("—", objectName="pageIndicator")
 
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
-        toolbar.addWidget(self._add_button)
-        toolbar.addStretch(1)
+        # Add agent sits opposite the page title, not in its own toolbar row.
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        title_row.addWidget(QLabel("Agent management", objectName="pageTitle"))
+        title_row.addStretch(1)
+        title_row.addWidget(self._add_button)
 
         pagination = QHBoxLayout()
         pagination.setSpacing(8)
         pagination.addWidget(QLabel("Rows per page", objectName="fieldCaption"))
         pagination.addWidget(self._limit_selector)
+        pagination.addWidget(self._count_label)
         pagination.addStretch(1)
         pagination.addWidget(self._prev_button)
         pagination.addWidget(self._page_indicator)
@@ -165,17 +171,9 @@ class AgentManagementPage(QWidget):
         # User collapsed the data body; a name click always re-expands.
         self._data_collapsed = False
 
-        self._data_title = QLabel("Agent data", objectName="sectionTitle")
         self._data_toggle_button = QPushButton("Hide", objectName="pageButton")
         self._data_toggle_button.setToolTip("Hide or show the data table")
         self._data_toggle_button.clicked.connect(self._on_data_toggle_clicked)
-        self._data_toggle_button.hide()  # nothing to toggle before a selection
-        data_title_row = QHBoxLayout()
-        data_title_row.setContentsMargins(0, 0, 0, 0)
-        data_title_row.setSpacing(8)
-        data_title_row.addWidget(self._data_title)
-        data_title_row.addStretch(1)
-        data_title_row.addWidget(self._data_toggle_button)
         self._data_subtitle = QLabel(_DATA_EMPTY_CAPTION, objectName="pageSubtitle")
         self._data_error_banner = QLabel(objectName="errorBanner", wordWrap=True)
         self._data_error_banner.hide()
@@ -225,6 +223,8 @@ class AgentManagementPage(QWidget):
             self._on_data_limit_changed
         )
 
+        self._data_count_label = QLabel("—", objectName="pageIndicator")
+
         self._data_prev_button = QPushButton("Previous", objectName="pageButton")
         self._data_prev_button.clicked.connect(self._go_data_previous)
         self._data_next_button = QPushButton("Next", objectName="pageButton")
@@ -235,45 +235,82 @@ class AgentManagementPage(QWidget):
         data_bulk_bar.setSpacing(8)
         data_bulk_bar.addWidget(self._data_select_all)
         data_bulk_bar.addStretch(1)
+        data_bulk_bar.addWidget(self._data_toggle_button)
         data_bulk_bar.addWidget(self._data_delete_selected_button)
 
         data_pagination = QHBoxLayout()
         data_pagination.setSpacing(8)
         data_pagination.addWidget(QLabel("Rows per page", objectName="fieldCaption"))
         data_pagination.addWidget(self._data_limit_selector)
+        data_pagination.addWidget(self._data_count_label)
         data_pagination.addStretch(1)
         data_pagination.addWidget(self._data_prev_button)
         data_pagination.addWidget(self._data_page_indicator)
         data_pagination.addWidget(self._data_next_button)
 
+        # The bulk bar (with the Hide/Show toggle) stays visible while
+        # collapsed, so only the table + pagination hide below it.
+        self._data_collapsible = QWidget()
+        data_collapsible_layout = QVBoxLayout(self._data_collapsible)
+        data_collapsible_layout.setContentsMargins(0, 0, 0, 0)
+        data_collapsible_layout.setSpacing(12)
+        data_collapsible_layout.addWidget(self._data_table, 1)
+        data_collapsible_layout.addLayout(data_pagination)
+
         # One wrapper so a single hide()/show() toggles the whole active area;
-        # the title/subtitle/banners above stay visible in the empty state.
+        # the subtitle/banners above stay visible in the empty state.
         self._data_body = QWidget()
         data_body_layout = QVBoxLayout(self._data_body)
         data_body_layout.setContentsMargins(0, 0, 0, 0)
         data_body_layout.setSpacing(12)
         data_body_layout.addLayout(data_bulk_bar)
-        data_body_layout.addWidget(self._data_table)
-        data_body_layout.addLayout(data_pagination)
+        data_body_layout.addWidget(self._data_collapsible, 1)
         self._data_body.hide()
+
+        agents_section = QWidget()
+        agents_layout = QVBoxLayout(agents_section)
+        agents_layout.setContentsMargins(0, 0, 0, 0)
+        agents_layout.setSpacing(12)
+        agents_layout.addLayout(title_row)
+        agents_layout.addWidget(self._error_banner)
+        agents_layout.addWidget(self._progress)
+        agents_layout.addWidget(self._table, 1)
+        agents_layout.addLayout(pagination)
+
+        data_section = QWidget()
+        data_layout = QVBoxLayout(data_section)
+        data_layout.setContentsMargins(0, 0, 0, 0)
+        data_layout.setSpacing(12)
+        data_layout.addWidget(self._data_subtitle)
+        data_layout.addWidget(self._data_error_banner)
+        data_layout.addWidget(self._data_progress)
+        data_layout.addWidget(self._data_body, 1)
+
+        # The divider is draggable: users reallocate height between the two
+        # sections. Order is fixed and neither pane ever collapses fully.
+        self._splitter = QSplitter(Qt.Orientation.Vertical, objectName="agentsSplitter")
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.addWidget(agents_section)
+        self._splitter.addWidget(data_section)
+        self._splitter.setStretchFactor(0, 3)
+        self._splitter.setStretchFactor(1, 2)
+        self._splitter_sized = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(32, 24, 32, 24)
-        root.setSpacing(12)
-        root.addWidget(QLabel("Agent management", objectName="pageTitle"))
-        root.addWidget(self._subtitle)
-        root.addWidget(self._error_banner)
-        root.addWidget(self._progress)
-        root.addLayout(toolbar)
-        root.addWidget(self._table, 3)
-        root.addLayout(pagination)
-        root.addLayout(data_title_row)
-        root.addWidget(self._data_subtitle)
-        root.addWidget(self._data_error_banner)
-        root.addWidget(self._data_progress)
-        root.addWidget(self._data_body, 2)
+        root.addWidget(self._splitter)
 
     # -- public ----------------------------------------------------------------
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._splitter_sized:
+            # First real geometry: seed the old 3:2 fixed stretch as the
+            # initial divider position (later drags/resizes win).
+            self._splitter_sized = True
+            height = max(self._splitter.height(), 200)
+            top = height * 3 // 5
+            self._splitter.setSizes([top, height - top])
 
     def reload(self) -> None:
         """Fetch the current page; a no-op while a fetch is already running."""
@@ -301,7 +338,7 @@ class AgentManagementPage(QWidget):
         self._preserve_banner = False
         self._error_banner.hide()
         self._table.setRowCount(0)
-        self._subtitle.setText("—")
+        self._count_label.setText("—")
         self._page_indicator.setText("—")
         self._prev_button.setEnabled(False)
         self._next_button.setEnabled(False)
@@ -324,7 +361,7 @@ class AgentManagementPage(QWidget):
             self._preserve_banner = False
         else:
             self._error_banner.hide()
-        self._subtitle.setText(f"{self._total} agents")
+        self._count_label.setText(f" {self._total} rows")
         self._populate(page.agents)
         if self._selected_agent is not None:
             # Refresh the selection snapshot (renames, status changes) when
@@ -345,7 +382,7 @@ class AgentManagementPage(QWidget):
         self._error_banner.show()
         self._table.setRowCount(0)
         self._row_agents = []
-        self._subtitle.setText("—")
+        self._count_label.setText("—")
         self._page_indicator.setText("—")
         self._prev_button.setEnabled(False)
         self._next_button.setEnabled(False)
@@ -565,7 +602,7 @@ class AgentManagementPage(QWidget):
         # A name click is an explicit "show me" — it always re-expands.
         self._data_collapsed = False
         self._apply_data_collapse()
-        self._data_toggle_button.show()
+        self._data_body.show()
         self._reload_data()
 
     def _on_data_cell_clicked(self, row: int, column: int) -> None:
@@ -584,7 +621,9 @@ class AgentManagementPage(QWidget):
         self._apply_data_collapse()
 
     def _apply_data_collapse(self) -> None:
-        self._data_body.setVisible(not self._data_collapsed)
+        # Only the table + pagination hide — the bulk bar (holding this
+        # button's Show state) must stay visible to undo the collapse.
+        self._data_collapsible.setVisible(not self._data_collapsed)
         self._data_toggle_button.setText("Show" if self._data_collapsed else "Hide")
 
     # -- data fetching -----------------------------------------------------------
@@ -623,6 +662,7 @@ class AgentManagementPage(QWidget):
             self._preserve_data_banner = False
         else:
             self._data_error_banner.hide()
+        self._data_count_label.setText(f" {self._data_total} rows")
         self._sync_data_subtitle()
         self._populate_data(page.data)
         self._sync_data_pagination(page_count)
@@ -645,6 +685,7 @@ class AgentManagementPage(QWidget):
         self._data_table.setRowCount(0)
         self._data_rows = []
         self._sync_data_bulk_state()
+        self._data_count_label.setText("—")
         self._data_page_indicator.setText("—")
         self._data_prev_button.setEnabled(False)
         self._data_next_button.setEnabled(False)
@@ -652,11 +693,8 @@ class AgentManagementPage(QWidget):
     def _sync_data_subtitle(self) -> None:
         if self._selected_agent is None:
             self._data_subtitle.setText(_DATA_EMPTY_CAPTION)
-            return
-        noun = "record" if self._data_total == 1 else "records"
-        self._data_subtitle.setText(
-            f"Data from {self._selected_agent.name} · {self._data_total} {noun}"
-        )
+        else:
+            self._data_subtitle.setText("")
 
     # -- data pagination -----------------------------------------------------------
 
@@ -872,6 +910,7 @@ class AgentManagementPage(QWidget):
         self._preserve_data_banner = False
         self._data_error_banner.hide()
         self._data_table.setRowCount(0)
+        self._data_count_label.setText("—")
         self._data_page_indicator.setText("—")
         self._data_prev_button.setEnabled(False)
         self._data_next_button.setEnabled(False)
@@ -881,5 +920,5 @@ class AgentManagementPage(QWidget):
         self._data_delete_selected_button.setEnabled(False)
         self._data_delete_selected_button.setText("Delete selected")
         self._sync_data_subtitle()
-        self._data_toggle_button.hide()
+        # Hiding _data_body covers the toggle button too (bulk bar inside).
         self._data_body.hide()

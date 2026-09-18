@@ -79,7 +79,9 @@ class MainPage(QWidget):
             self._show_user_management
         )
         self._body.currentChanged.connect(self._on_body_page_changed)
-        self._dashboard_nav.setChecked(True)
+        # Every session lands on Agents; the pageChanged handler syncs the
+        # nav buttons (the reload inside it no-ops without a session).
+        self._body.setCurrentWidget(self._agent_management_page)
 
         self._notifications: deque[tuple[str, datetime | None]] = deque(maxlen=20)
 
@@ -95,6 +97,10 @@ class MainPage(QWidget):
         self._account_button.setText(user.email)
         self._dashboard_page.set_user(user)
         self._settings_page.set_user(user)
+        # Sessions open on the Agents page. The explicit reload covers the
+        # case where Agents was already current (no currentChanged fires).
+        self._body.setCurrentWidget(self._agent_management_page)
+        self._agent_management_page.reload()
 
     def reset(self) -> None:
         """Clear session data; the next login may be a different user."""
@@ -105,7 +111,9 @@ class MainPage(QWidget):
         self._settings_page.set_user(None)
         self._agent_management_page.clear()
         self._user_management_page.clear()
-        self._body.setCurrentWidget(self._dashboard_page)
+        # Preselect Agents so the next session opens there (the pageChanged
+        # reload no-ops: the session is already torn down at this point).
+        self._body.setCurrentWidget(self._agent_management_page)
 
     # -- navigation ---------------------------------------------------------------
 
