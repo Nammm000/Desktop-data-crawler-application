@@ -24,8 +24,9 @@ globs: ["app/ui/**", "app/resources/**"]
   timestamp; "No notifications" when empty). `reset()` clears the list and
   the unread flag.
 - MainPage's body stack: DashboardPage / AgentManagementPage / SettingsPage /
-  UserManagementPage. Each nav button is checked only while its page is
-  current. Every session opens on AgentManagementPage — `set_user` switches
+  UserManagementPage / OrphanedDataPage. Each nav button is checked only while
+  its page is current (so neither is checked while UserManagementPage or
+  OrphanedDataPage shows). Every session opens on AgentManagementPage — `set_user` switches
   there and reloads it (the explicit reload covers an already-current page),
   and `reset()` preselects it for the next login.
 - DashboardPage always shows `This is the Dashboard page`; an admin
@@ -101,6 +102,26 @@ globs: ["app/ui/**", "app/resources/**"]
   (agent deleted elsewhere) clears the section with "The selected agent no
   longer exists."; `reload()` (page re-entry) refreshes the selected agent's
   data too; re-clicking the same name refetches page 1.
+- OrphanedDataPage (`#orphanedDataRoot`, every authenticated user): full-page
+  "No-agent data" table of crawled records whose agent was deleted, reached
+  via the "No-agent data" `#pageButton` in the AgentManagementPage title row
+  (left of "Add agent"; never disabled by `_set_loading` — navigation is not
+  a table action). Its own title row holds the "Back to agents" `#pageButton`
+  (emits `agent_management_requested`; MainPage wires both directions — the
+  Dashboard→UserManagement precedent; neither header nav is checked while it
+  is current). `QTableWidget#dataTable` with 6 columns — checkbox, Agent
+  (plain text + tooltip "The agent this record was crawled by (now deleted)";
+  deliberately NOT a link — a same-name recreated agent never relinks, the
+  doc's `agentId` snapshot is dead), URL (Stretch, full URL tooltip), Fields
+  (same link/"—" rendering + `AgentDataDialog` open as the agent-data pane),
+  Crawled, per-row trash. Own banner/progress/bulk bar
+  (`#selectAllCheckBox` + `#dangerButton` "Delete selected (N)")/pagination
+  and the standard busy flags; deletes reuse `session.delete_data` /
+  `delete_data_items` via `ConfirmDialog.ask(..., danger=True)`, one in
+  flight; success → `reload()` (clamps an emptied last page), error → banner
+  + `_preserve_banner` + `reload()`. No 404 branch (the orphaned listing
+  never 404s); reload on page entry via `_on_body_page_changed`; `clear()`
+  on session end; no WS live-refresh — orphan visibility lands on re-entry.
 - AgentDialog (modal, `#agentDialog`, fixed width 560, height refits via
   `adjustSize()`): Name `QLineEdit` (max 100), Format
   `chosen_combo("formatCombo")` (JSON/XML/Markdown → json/xml/md), and a

@@ -3,7 +3,7 @@
 Owns one QWebSocket to /api/v1/notifications/ws plus a 5 s reconnect timer.
 QWebSocket is event-loop native, so everything runs on the GUI thread — no
 worker threads, no QSettings. Unread/menu state lives in MainPage; this class
-only turns frames into Notification objects.
+only turns frames into Notification / AgentStatusEvent objects.
 """
 
 from __future__ import annotations
@@ -14,7 +14,11 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QAbstractSocket
 from PySide6.QtWebSockets import QWebSocket
 
-from app.api.client import Notification, parse_notification
+from app.api.client import (
+    Notification,
+    parse_agent_status,
+    parse_notification,
+)
 from app.core.session import SessionController
 
 _RECONNECT_DELAY_MS = 5_000
@@ -22,6 +26,7 @@ _RECONNECT_DELAY_MS = 5_000
 
 class NotificationClient(QObject):
     notification_received = Signal(object)  # Notification
+    agent_status_received = Signal(object)  # AgentStatusEvent
 
     def __init__(self, session: SessionController, parent: QObject | None = None):
         super().__init__(parent)
@@ -79,6 +84,10 @@ class NotificationClient(QObject):
         notification = parse_notification(data)
         if notification is not None and notification.message:
             self.notification_received.emit(notification)
+            return
+        event = parse_agent_status(data)
+        if event is not None and event.status:
+            self.agent_status_received.emit(event)
 
     def _on_disconnected(self) -> None:
         if self._active:

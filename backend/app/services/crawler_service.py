@@ -12,6 +12,7 @@ and broadcasts the outcome with the crawled data."""
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
@@ -276,6 +277,7 @@ async def execute_crawl(
     raises (the Failed path swallows and logs); always deregisters itself."""
     agent_id = agent_snapshot["id"]
     frame_agent = {"_id": agent_id, "name": agent_snapshot["name"]}
+    started = time.monotonic()  # monotonic: runtime survives clock adjustments
     try:
         # Constructed per run inside the running loop, never shared.
         runner = AsyncCrawlerRunner(settings=_scrapy_settings(get_settings()))
@@ -294,6 +296,7 @@ async def execute_crawl(
             _status_frame(
                 frame_agent,
                 AgentStatus.COMPLETED,
+                runtimeSeconds=round(time.monotonic() - started, 1),
                 count=len(docs),
                 data=[
                     DataOut.from_doc(d).model_dump(mode="json", by_alias=True)
@@ -309,6 +312,7 @@ async def execute_crawl(
                 _status_frame(
                     frame_agent,
                     AgentStatus.FAILED,
+                    runtimeSeconds=round(time.monotonic() - started, 1),
                     message="Crawl failed; see server logs for details",
                 )
             )

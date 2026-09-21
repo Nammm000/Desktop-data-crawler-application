@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -66,6 +66,9 @@ _DATA_COLUMNS = ("", "URL", "Fields", "Crawled", "")
 
 
 class AgentManagementPage(QWidget):
+    # Emitted by the "No-agent data" button; MainPage switches pages.
+    orphaned_data_requested = Signal()
+
     def __init__(self, session: SessionController, parent=None):
         super().__init__(parent)
         self.setObjectName("agentManagementRoot")
@@ -121,6 +124,14 @@ class AgentManagementPage(QWidget):
         self._add_button.setIcon(QIcon(str(_ICONS_DIR / "plus.svg")))
         self._add_button.clicked.connect(self._open_create_dialog)
 
+        # Navigation only — never disabled by _set_loading (a table fetch
+        # must not block leaving the page, same as the header nav).
+        self._orphaned_button = QPushButton("No-agent data", objectName="pageButton")
+        self._orphaned_button.setToolTip(
+            "View crawled records whose agent has been deleted"
+        )
+        self._orphaned_button.clicked.connect(self.orphaned_data_requested.emit)
+
         self._limit_selector = chosen_combo("limitSelector")
         for limit in _LIMIT_CHOICES:
             self._limit_selector.addItem(str(limit), limit)
@@ -138,11 +149,13 @@ class AgentManagementPage(QWidget):
         self._next_button.clicked.connect(self._go_next)
         self._page_indicator = QLabel("—", objectName="pageIndicator")
 
-        # Add agent sits opposite the page title, not in its own toolbar row.
+        # Add agent sits opposite the page title, not in its own toolbar row;
+        # No-agent data (a plain secondary) sits left of it.
         title_row = QHBoxLayout()
         title_row.setSpacing(8)
         title_row.addWidget(QLabel("Agent management", objectName="pageTitle"))
         title_row.addStretch(1)
+        title_row.addWidget(self._orphaned_button)
         title_row.addWidget(self._add_button)
 
         pagination = QHBoxLayout()

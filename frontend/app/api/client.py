@@ -93,6 +93,17 @@ class Notification:
     created_at: datetime | None
 
 
+@dataclass(frozen=True)
+class AgentStatusEvent:
+    agent_id: str
+    agent_name: str
+    status: str  # "Running" | "Completed" | "Failed"
+    created_at: datetime | None
+    runtime_seconds: float | None  # Completed/Failed frames only
+    count: int | None  # Completed frames only
+    message: str | None  # Failed frames only
+
+
 def _parse_timestamp(raw) -> datetime | None:
     if not raw:
         return None
@@ -184,6 +195,25 @@ def parse_notification(data: dict) -> Notification | None:
     return Notification(
         message=str(data.get("message") or ""),
         created_at=_parse_timestamp(data.get("createdAt")),
+    )
+
+
+def parse_agent_status(data: dict) -> AgentStatusEvent | None:
+    """WebSocket frame -> AgentStatusEvent; None for other frame types.
+    Malformed frames parse with None fields instead of raising (live frames
+    must never take the GUI down)."""
+    if not isinstance(data, dict) or data.get("type") != "agentStatus":
+        return None
+    runtime = data.get("runtimeSeconds")
+    count = data.get("count")
+    return AgentStatusEvent(
+        agent_id=str(data.get("agentId") or ""),
+        agent_name=str(data.get("agentName") or ""),
+        status=str(data.get("status") or ""),
+        created_at=_parse_timestamp(data.get("createdAt")),
+        runtime_seconds=float(runtime) if isinstance(runtime, (int, float)) else None,
+        count=int(count) if isinstance(count, int) else None,
+        message=str(data["message"]) if data.get("message") else None,
     )
 
 
@@ -437,6 +467,19 @@ class ApiClient:
         payload = self._request(
             "GET",
             f"/api/v1/agents/{agent_id}/data",
+            params={"limit": limit, "skip": skip},
+            bearer=access_token,
+        )
+        return _parse_or_fail(payload, _parse_agent_data_page)
+
+    def list_orphaned_data(
+        self, *, access_token: str, limit: int = 50, skip: int = 0
+    ) -> AgentDataPage:
+        # Same DataOut wire shape as the per-agent listing; never 404s —
+        # an empty page just means no agent has been deleted (yet).
+        payload = self._request(
+            "GET",
+            "/api/v1/data/orphaned",
             params={"limit": limit, "skip": skip},
             bearer=access_token,
         )

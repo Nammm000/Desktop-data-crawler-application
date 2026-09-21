@@ -27,6 +27,7 @@ globs: ["app/api/**"]
 | `delete_agent()` | `DELETE /api/v1/agents/{id}` | Bearer | — | `None` (204, empty body) | `404` |
 | `run_agent()` | `GET /api/v1/agents/{id}/run` | Bearer | — | `202 Agent` (status `Running`) | `404`, `409` already running, `400` script not runnable |
 | `list_agent_data()` | `GET /api/v1/agents/{id}/data?limit&skip` | Bearer | — | `AgentDataPage(data, total)` | `404` agent gone, `422` bad params |
+| `list_orphaned_data()` | `GET /api/v1/data/orphaned?limit&skip` | Bearer | — | `AgentDataPage(data, total)` | `422` bad params |
 | `delete_data()` | `DELETE /api/v1/data/{id}` | Bearer | — | `None` (204, empty body) | `404` |
 | `delete_data_items()` | `DELETE /api/v1/data` | Bearer | `{"ids": [...]}` (min 1) | `int` (deleted count) | `422` |
 | `websocket_url(token)` | `WS /api/v1/notifications/ws?token=` | access token in query | — | `ws://`/`wss://` URL string | handshake rejection (close 1008) |
@@ -58,7 +59,12 @@ globs: ["app/api/**"]
   `links` list of URL strings). The camelCase `DataOut` (`agentId`,
   `agentName`, `url`, `fields` mapping XPath name → value/`null`,
   `crawledAt`) parses into `AgentData` / `AgentDataPage`; the data list sorts
-  newest-first server-side. `delete_data_items` sends `{"ids": [...]}` —
+  newest-first server-side. `list_orphaned_data` hits
+  `GET /api/v1/data/orphaned` — same `DataOut` wire shape, so it reuses the
+  same parse; it NEVER 404s (an empty page just means no agent has been
+  deleted) and supplements `list_agent_data`, which 404s once the agent is
+  gone. Orphaned docs never relink to a recreated same-name agent.
+  `delete_data_items` sends `{"ids": [...]}` —
   unknown ids simply don't count — and reuses the deleted-count parse;
   `delete_data` is 204-never-parsed. Data docs survive agent deletion, but
   `list_agent_data` 404s once the agent is gone (the UI clears its data
@@ -72,7 +78,11 @@ globs: ["app/api/**"]
   query string — QWebSocket cannot set handshake headers), and
   `parse_notification(dict)` turns frames into `Notification(message,
   created_at)`, returning `None` for control frames (`{"type": "connected"}`)
-  so the client never shows them.
+  so the client never shows them. Agent-run pushes parse via
+  `parse_agent_status(dict)` into `AgentStatusEvent(agent_id, agent_name,
+  status, created_at, runtime_seconds, count, message)` (`None` for other
+  frame types; optional fields are `None` when absent — Completed carries
+  `runtime_seconds` + `count`, Failed carries `runtime_seconds` + `message`).
 
 ## Errors
 

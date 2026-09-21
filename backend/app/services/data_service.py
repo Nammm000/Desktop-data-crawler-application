@@ -1,5 +1,6 @@
 """Persistence for the `data` collection — written by crawler runs, read by
-the per-agent data listing, deleted by the data endpoints."""
+the per-agent data listing and the orphaned-data listing, deleted by the data
+endpoints."""
 
 import uuid
 from datetime import datetime, timezone
@@ -7,6 +8,7 @@ from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import DESCENDING
 
+from app.models.agent import AGENTS_COLLECTION
 from app.models.data import DATA_COLLECTION
 
 
@@ -42,6 +44,30 @@ async def list_by_agent(
     stamps all its docs with the same now) are broken by _id so pagination
     boundaries stay deterministic — same idiom as agent_service.list_agents."""
     filter_ = {"agentId": agent_id}
+    cursor = (
+        db[DATA_COLLECTION]
+        .find(filter_)
+        .sort([("crawledAt", DESCENDING), ("_id", DESCENDING)])
+        .skip(skip)
+        .limit(limit)
+    )
+    docs = await cursor.to_list(length=limit)
+    total = await db[DATA_COLLECTION].count_documents(filter_)
+    return docs, total
+
+
+async def list_orphaned(
+    db: AsyncIOMotorDatabase, *, skip: int = 0, limit: int = 50
+) -> tuple[list[dict], int]:
+    """One page of crawled-data docs whose agent no longer exists (newest
+    first) plus the total count. agentId is a run-start snapshot with no
+    cascade, so deleting an agent orphans its docs; $nin against the live
+    agent _ids finds them (a recreated same-name agent never relinks — it
+    has a fresh _id). $nin cannot use idx_agent_crawled — accepted scan
+    until the collection grows (same tolerance as the other listings).
+    Ties on crawledAt break by _id, same idiom as list_by_agent."""
+    agent_ids = await db[AGENTS_COLLECTION].distinct("_id")
+    filter_ = {"agentId": {"$nin": agent_ids}}
     cursor = (
         db[DATA_COLLECTION]
         .find(filter_)

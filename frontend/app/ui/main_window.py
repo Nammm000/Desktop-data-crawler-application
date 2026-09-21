@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.api.client import AgentStatusEvent
 from app.core.notifications import NotificationClient
 from app.core.session import SessionController
 from app.ui.login_page import LoginPage
@@ -39,6 +40,19 @@ class _LoadingPage(QWidget):
         layout.addSpacing(16)
         layout.addLayout(row)
         layout.addStretch(1)
+
+
+def _agent_status_message(event: AgentStatusEvent) -> str:
+    runtime = f"{event.runtime_seconds:.1f}s" if event.runtime_seconds is not None else ""
+    if event.status == "Failed":
+        suffix = f" after {runtime}" if runtime else ""
+        return f'Agent "{event.agent_name}" failed{suffix}'
+    records = ""
+    if event.count is not None:
+        records = f" ({event.count} record{'s' if event.count != 1 else ''})"
+    if runtime:
+        return f'Agent "{event.agent_name}" completed in {runtime}{records}'
+    return f'Agent "{event.agent_name}" completed{records}'
 
 
 class MainWindow(QMainWindow):
@@ -81,6 +95,7 @@ class MainWindow(QMainWindow):
         self._notifications.notification_received.connect(
             lambda n: self._main_page.add_notification(n.message, n.created_at)
         )
+        self._notifications.agent_status_received.connect(self._on_agent_status)
 
     def _on_session_started(self, user) -> None:
         self._main_page.set_user(user)
@@ -99,3 +114,14 @@ class MainWindow(QMainWindow):
     def _on_auth_failed(self, message: str) -> None:
         self._login_page.set_busy(False)
         self._login_page.show_error(message)
+
+    def _on_agent_status(self, event: AgentStatusEvent) -> None:
+        if self._session.user is None:
+            return  # frame racing logout; MainPage was already reset
+        if event.status in ("Completed", "Failed"):
+            self._main_page.add_notification(
+                _agent_status_message(event), event.created_at
+            )
+        # Refresh on every status frame (Running included): curl/other-user
+        # runs also flip the row live.
+        self._main_page.refresh_agents_if_visible()

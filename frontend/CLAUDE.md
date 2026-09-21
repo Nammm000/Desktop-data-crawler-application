@@ -34,7 +34,7 @@ thread via queued signals — workers never touch widgets.
 
 ```
 app/
-├── api/client.py               # ApiClient: all 20 endpoints, camelCase JSON, ApiError; websocket_url + parse_notification
+├── api/client.py               # ApiClient: all 21 endpoints, camelCase JSON, ApiError; websocket_url + parse_notification + parse_agent_status
 ├── core/worker.py              # run_async(): pool threads -> queued signals (GUI thread)
 ├── core/session.py             # SessionController: tokens, refresh, QSettings, forced logout
 ├── core/notifications.py       # NotificationClient: QWebSocket stream + 5 s reconnect (GUI thread)
@@ -47,6 +47,7 @@ app/
 ├── ui/change_password_dialog.py  # modal dialog (3 PasswordLineEdit fields)
 ├── ui/agent_dialog.py          # modal Add/Edit agent form (script editor is the source of truth; json adds key-value rows + Generate JSON)
 ├── ui/agent_data_dialog.py     # read-only modal showing one crawled record (URL subtitle, crawled date, pretty-JSON fields viewer)
+├── ui/orphaned_data_page.py    # all users: "No-agent data" — crawled records whose agent was deleted (view/delete, paginated)
 ├── ui/confirm_dialog.py        # ConfirmDialog.ask(): styled yes/no card (danger variant)
 ├── ui/format.py                # format_date / format_role / format_status / format_time
 ├── ui/main_page.py             # header (Dashboard + Agents nav left, bell + account email menu right)
@@ -65,9 +66,10 @@ app/
 - 401 → refresh once → retry once → forced logout if that fails
 - camelCase JSON lives only in `app/api/client.py`; everything else sees `User` /
   `TokenPair` / `UserPage` / `Agent` / `AgentPage` / `AgentData` /
-  `AgentDataPage` / `Notification`
-  (WS frames parse via `parse_notification`; `websocket_url(token)` builds the
-  stream URL with the access token in the query string)
+  `AgentDataPage` / `Notification` / `AgentStatusEvent`
+  (WS frames parse via `parse_notification` / `parse_agent_status`;
+  `websocket_url(token)` builds the stream URL with the access token in the
+  query string)
 - Client validation mirrors the backend (username 3–32 `^[a-zA-Z0-9_.-]+$`,
   password 8–64 chars / ≤72 UTF-8 bytes, email format; agent name 1–100 chars
   stripped, script 1–1,000,000 chars — the script editor's text is submitted
@@ -78,7 +80,11 @@ app/
 - The header nav is Dashboard + Agents, both for every authenticated user;
   Settings + Log out live in the account menu behind the email button. The
   User management entry is admin-only (Dashboard card gated on
-  `user.role == "admin"`). Every session start (login, sign-up, silent
+  `user.role == "admin"`); the No-agent data entry is the "No-agent data"
+  `#pageButton` in the AgentManagementPage title row (left of "Add agent",
+  never disabled by a fetch — navigation must not block). While either of
+  those pages is current, neither nav button is checked. Every session start
+  (login, sign-up, silent
   refresh) lands on the Agents page — `MainPage.set_user` switches there and
   reloads it; `reset()` preselects it for the next login
 - A bell button (`#notificationButton`) sits left of the account button:
@@ -86,7 +92,11 @@ app/
   at 20, `· HH:MM` via `format_time`), unread state via the `[unread="true"]`
   QSS attribute + repolish. `NotificationClient` (QWebSocket, GUI thread, 5 s
   reconnect, refresh-on-handshake-rejection) is owned by `MainWindow` and
-  started/stopped by `session_started` / `session_ended`
+  started/stopped by `session_started` / `session_ended`. Agent-status pushes
+  (`agent_status_received`) add a bell entry on Completed/Failed —
+  `Agent "X" completed in N s (M records)` / `Agent "X" failed after N s` —
+  and live-refresh the Agents page when it is the current page (every status
+  frame, so curl/other-user runs also flip the row)
 - Admin role/status edits go through the per-row combos in
   `UserManagementPage`; the current user's own row is plain text (the backend
   rejects self-changes)
@@ -121,6 +131,17 @@ app/
   table + pagination (`_data_collapsible`) so the bulk bar — and the Show
   button — stay visible; a name click always re-expands; clearing the
   section resets it
+- OrphanedDataPage ("No-agent data", all users): `session.list_orphaned_data`
+  (`GET /api/v1/data/orphaned`) lists crawled records whose agent was deleted —
+  the same `AgentDataPage` parse as the per-agent data, never 404s. `#dataTable`
+  with 6 columns: checkbox, Agent (plain text with tooltip — a same-name
+  recreated agent never relinks; the doc's `agentId` snapshot is dead), URL
+  (Stretch, tooltip), Fields (indigo link → `AgentDataDialog`, "—" inert),
+  Crawled, per-row trash. "Back to agents" `#pageButton` in the title row emits
+  `agent_management_requested` (MainPage wires both directions). Own
+  banner/progress/bulk bar/pagination, confirm+danger deletes one in flight,
+  last-page clamp, reload on page entry, `clear()` on session end; no WS
+  live-refresh (visibility changes land on re-entry)
 - Styling only via `app/resources/style.qss` — no `setStyleSheet` in code;
   QSS `image:` urls use the `%icons%` placeholder, substituted with the
   absolute icons path in `main.py` (QSS resolves urls against the CWD)

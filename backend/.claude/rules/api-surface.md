@@ -28,9 +28,10 @@ paths:
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
 | GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, > `CRAWL_MAX_PAGES` links) |
 | GET | `/api/v1/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first) | `401`, `404` "Agent not found" |
+| GET | `/api/v1/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first; docs whose `agentId` matches no live agent) | `401`, `422` |
 | DELETE | `/api/v1/data` | Bearer | `{ids}` (list, ≥1) | `200 {deleted: n}` (unknown ids don't count) | `401`, `422` |
 | DELETE | `/api/v1/data/{dataId}` | Bearer | — | `204` | `401`, `404` "Data not found" |
-| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` every `NOTIFICATION_INTERVAL_SECONDS` (def 900) plus `{"type":"agentStatus",...}` frames on agent runs | handshake rejection (close 1008 → HTTP 403) |
+| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` every `NOTIFICATION_INTERVAL_SECONDS` (def 900) plus `{"type":"agentStatus",...}` frames on agent runs (Completed/Failed carry `runtimeSeconds`) | handshake rejection (close 1008 → HTTP 403) |
 
 When adding/removing/changing an endpoint, update this table and the README.
 
@@ -71,11 +72,20 @@ When adding/removing/changing an endpoint, update this table and the README.
   (`reset_interrupted_crawls`) flips restart-orphaned `Running` agents to
   `Failed`. Quirk: PATCHing an agent's status *to* `Running` without a crawl
   soft-locks runs (`409`) until it is patched back.
+- Data endpoints are open to every authenticated user (`CurrentUser`). Crawl
+  results survive agent deletion (no cascade): the per-agent listing 404s once
+  the agent is gone, while `GET /data/orphaned` (`data_service.list_orphaned`)
+  lists the survivors — `distinct` agent `_id`s + `{"agentId": {"$nin": ...}}`,
+  find + `count_documents` like every other listing. It never 404s (an empty
+  page just means nothing is orphaned) and a recreated same-name agent never
+  relinks orphans (`agentId` is a run-start snapshot). Declared before any
+  `GET /data/{dataId}` route would be (path-literal before path-param).
 - WS broadcast frames are flat camelCase dicts via the shared
   `connection_manager.manager` (registered by the notifications route):
   Running `{"type":"agentStatus","agentId","agentName","status":"Running","createdAt"}`;
-  Completed adds `"count"` and `"data"` (DataOut-shaped); Failed adds
-  `"message"`. Broadcasts reach every connected client.
+  Completed adds `"runtimeSeconds"` (float, 1 decimal), `"count"` and `"data"`
+  (DataOut-shaped); Failed adds `"runtimeSeconds"` and `"message"`. Broadcasts
+  reach every connected client.
 - WebSocket routes (`app/api/routes/notifications.py`): the access token rides
   in the `token` query param (QWebSocket cannot set handshake headers) and is
   validated at the handshake by `_handshake_user` (decode → `type == "access"`

@@ -62,7 +62,7 @@ Mapping to response models happens only at the route boundary via
   `allow_headers=["*"]`.
 - **Routers**: `auth.router` (`/auth`, tag `auth`), `users.router` (`/users`, tag
   `users`), `agents.router` (`/agents`, tag `agents`), `data.router` (`/data`,
-  tag `data` — data deletes), and `notifications.router`
+  tag `data` — orphaned-data listing + data deletes), and `notifications.router`
   (`/notifications`, tag `notifications` — one WebSocket endpoint), all mounted
   with `prefix="/api/v1"`.
 - **Health**: `GET /api/health` (unversioned) pings Mongo and reports
@@ -92,13 +92,13 @@ app/
 ├── services/crawler_service.py    # AgentScriptSpider, start_agent_crawl/execute_crawl,
 │                             # run-script validation, startup Running sweep
 ├── services/data_service.py  # build_data_docs + insert_many (crawl results), list_by_agent,
-│                             # delete_one / delete_many
+│                             # list_orphaned (deleted-agent data), delete_one / delete_many
 ├── services/connection_manager.py # shared WS registry (manager.broadcast)
 └── api/
     ├── deps.py               # bearer_scheme, DbDep, WsDbDep, CurrentUser, AdminUser (admin guard)
     └── routes/               # auth.py (5 endpoints), users.py (GET /users/me + 5 admin endpoints),
-│                             # agents.py (7 agent endpoints, CurrentUser), data.py (2 data endpoints),
-│                             # notifications.py (1 WS endpoint)
+│                             # agents.py (7 agent endpoints, CurrentUser), data.py (3 data endpoints
+│                             # incl. GET /orphaned), notifications.py (1 WS endpoint)
 ```
 
 ## Token architecture
@@ -268,7 +268,7 @@ sequenceDiagram
         SC-->>S: results [{url, fields}]
         S->>DB: data.insert_many (skipped when 0 items)
         S->>DB: status → Completed (or Failed on crash)
-        S->>WS: broadcast agentStatus Completed + count + data
+        S->>WS: broadcast agentStatus Completed + runtimeSeconds + count + data
     end
 ```
 

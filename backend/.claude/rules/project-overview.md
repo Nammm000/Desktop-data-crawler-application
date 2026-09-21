@@ -52,6 +52,9 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
 - Crawl-result listing (`GET /agents/{agentId}/data`): paginated newest-first
   read of the `data` collection for one agent (any authenticated user); unknown
   agent → 404, no runs yet → empty list
+- Orphaned-data listing (`GET /data/orphaned`): paginated newest-first read of
+  data docs whose agent has been deleted (any authenticated user); never 404s;
+  a recreated same-name agent never relinks them (`agentId` is a run-start snapshot)
 - Data deletes (`DELETE /data/{dataId}` single → 204; `DELETE /data` + `{ids}`
   bulk → `{deleted: n}`): open to every authenticated user (no ownership model,
   matching agents); unknown ids in the bulk list simply don't count
@@ -86,9 +89,10 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
 | GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl runs in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, too many links) |
 | GET | `/api/v1/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first) | `401`, `404` "Agent not found" |
+| GET | `/api/v1/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first; docs whose `agentId` matches no live agent) | `401`, `422` |
 | DELETE | `/api/v1/data` | Bearer | `{ids}` (list, ≥1) | `200 {deleted: n}` (unknown ids don't count) | `401`, `422` |
 | DELETE | `/api/v1/data/{dataId}` | Bearer | — | `204` | `401`, `404` "Data not found" |
-| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` per interval plus `{"type":"agentStatus","agentId","agentName","status","createdAt"[,"count","data"|"message"]}` frames on agent runs (broadcast to all clients) | handshake rejection (close 1008 → HTTP 403) |
+| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` per interval plus `{"type":"agentStatus","agentId","agentName","status","createdAt"[,"runtimeSeconds","count","data"|"message"]}` frames on agent runs (broadcast to all clients) | handshake rejection (close 1008 → HTTP 403) |
 | GET | `/api/health` | — | — | `200 {"status":"ok","database":"up"\|"down"}` | — |
 
 ### Response shapes
@@ -221,7 +225,7 @@ backend/
 │   ├── main.py                   # FastAPI app: lifespan, CORS, routers, /api/health
 │   ├── api/
 │   │   ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser
-│   │   └── routes/               # auth.py, users.py, agents.py (7 endpoints, CurrentUser), data.py (2 endpoints), notifications.py (1 WS endpoint)
+│   │   └── routes/               # auth.py, users.py, agents.py (7 endpoints, CurrentUser), data.py (3 endpoints incl. GET /orphaned), notifications.py (1 WS endpoint)
 │   ├── core/                     # config.py (settings), security.py (bcrypt/JWT/token utils)
 │   ├── db/mongo.py               # Motor lifecycle, ensure_indexes(), get_db
 │   ├── models/user.py            # UserRole, UserStatus, collection-name constants
@@ -246,7 +250,8 @@ backend/
 - `GET /agents/{agentId}/run` is a GET with side effects (explicit user choice);
   Bearer auth keeps prefetchers from triggering crawls.
 - Crawl-result docs survive agent deletion (no cascade) but are then unreachable
-  via `GET /agents/{agentId}/data` (unknown agent → 404).
+  via `GET /agents/{agentId}/data` (unknown agent → 404) — `GET /data/orphaned`
+  lists them instead; deleting them still requires the id-based delete endpoints.
 - A server restart (including `uvicorn --reload`) kills in-flight crawls; the
   startup sweep flips orphaned `Running` agents to `Failed`. Run without
   `--reload` when testing long crawls.

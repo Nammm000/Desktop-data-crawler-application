@@ -76,9 +76,10 @@ All routes are prefixed with `/api/v1`. JSON uses camelCase
 | DELETE | `/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
 | GET | `/agents/{agentId}/run` | Bearer | — | `202` `AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` already running, `400` script not runnable |
 | GET | `/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `DataList` `{data, total}` (newest first) | `401`, `404` |
+| GET | `/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `DataList` `{data, total}` (newest first; records whose `agentId` matches no live agent) | `401`, `422` |
 | DELETE | `/data` | Bearer | `{ids}` (list, ≥1) | `200` `{"deleted": n}` | `401`, `422` |
 | DELETE | `/data/{dataId}` | Bearer | — | `204` | `401`, `404` |
-| WS | `/notifications/ws?token=<accessToken>` | query token | — | ack `{"type":"connected"}`, then a `{"type":"notification","message","createdAt"}` frame every `NOTIFICATION_INTERVAL_SECONDS` (default 900) plus `{"type":"agentStatus", ...}` frames on agent runs | handshake rejected with close code 1008 (invalid/expired token, inactive user) |
+| WS | `/notifications/ws?token=<accessToken>` | query token | — | ack `{"type":"connected"}`, then a `{"type":"notification","message","createdAt"}` frame every `NOTIFICATION_INTERVAL_SECONDS` (default 900) plus `{"type":"agentStatus", ...}` frames on agent runs (Completed/Failed carry `runtimeSeconds`) | handshake rejected with close code 1008 (invalid/expired token, inactive user) |
 
 `UserOut`: `{id, username, email, role, status, createdAt}` — `passwordHash` is
 never exposed. `role` is `admin` or `user`; `status` is a plain string
@@ -108,8 +109,11 @@ produced by an agent run (`fields` maps each script field to its extracted text 
 `null`; `url` is the post-redirect final URL). `GET /agents/{agentId}/data` lists
 an agent's records newest-first with `?limit=&skip=`, wrapped as
 `DataList` `{data, total}`; an agent with no runs returns an empty list, an unknown
-agent id returns `404`. Crawl results survive agent deletion (no cascade) but become
-unreadable via this endpoint once the agent is gone. Records are deleted with
+agent id returns `404`. Crawl results survive agent deletion (no cascade) and become
+unreadable via this endpoint once the agent is gone — list them with
+`GET /data/orphaned` instead (data docs whose `agentId` matches no live agent;
+recreating an agent with the same name does not relink them, the id is a run-start
+snapshot). Records are deleted with
 `DELETE /data/{dataId}` (single → `204`) or `DELETE /data` + `{ids}` (bulk →
 `{"deleted": n}`; unknown ids don't count) — no agent scoping on deletes.
 
@@ -172,7 +176,8 @@ async def main():
 asyncio.run(main())"
 
 # Run an agent: 202 + status Running, then agentStatus frames on the WS above
-# (Running immediately; Completed/Failed with the crawled data when finished).
+# (Running immediately; Completed/Failed with runtimeSeconds, count and the
+# crawled data — or a failure message — when finished).
 # A runnable script is a JSON object: "links" = list of URLs to crawl, every
 # other key = field name mapped to one XPath or a list of fallback XPaths
 # (tried in order until one matches; element matches yield their text).
@@ -180,6 +185,9 @@ curl -s $BASE/agents/<agentId>/run -H "Authorization: Bearer <accessToken>"
 
 # List the crawled data an agent produced (newest first, paginated)
 curl -s "$BASE/agents/<agentId>/data?limit=20&skip=0" -H "Authorization: Bearer <accessToken>"
+
+# List crawled data whose agent has been deleted (newest first, paginated)
+curl -s "$BASE/data/orphaned?limit=20&skip=0" -H "Authorization: Bearer <accessToken>"
 
 # Delete data documents: one by id, or many by ids (unknown ids don't count)
 curl -s -X DELETE $BASE/data/<dataId> -H "Authorization: Bearer <accessToken>"
@@ -203,11 +211,11 @@ app/
 ├── services/token_service.py# Refresh token issue/rotate/revoke + reuse detection
 ├── services/agent_service.py# Agent CRUD + script JSON validation
 ├── services/crawler_service.py  # Scrapy spider + run orchestration (status flips, WS broadcast)
-├── services/data_service.py # data collection persistence for crawl results + per-agent listing
+├── services/data_service.py # data collection persistence for crawl results + per-agent/orphaned listings
 ├── services/connection_manager.py # shared WS registry for backend broadcasts
 └── api/
     ├── deps.py              # get_current_user / get_current_admin dependencies
-    └── routes/              # auth.py, users.py, agents.py (7 agent endpoints), data.py (2 data endpoints), notifications.py (1 WS endpoint)
+    └── routes/              # auth.py, users.py, agents.py (7 agent endpoints), data.py (3 data endpoints incl. GET /orphaned), notifications.py (1 WS endpoint)
 ```
 
 ## MongoDB
@@ -234,7 +242,8 @@ Collections:
 - `data` — one document per crawled page:
   `{_id, agentId, agentName, url, fields: {field: value | null}, crawledAt}` with a
   compound `{agentId, crawledAt}` index. Written by agent runs and read by
-  `GET /agents/{agentId}/data`; unmatched fields are `null`, never missing.
+  `GET /agents/{agentId}/data` (and `GET /data/orphaned` for docs whose agent was
+  deleted); unmatched fields are `null`, never missing.
 
 ## Notes
 

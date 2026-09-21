@@ -98,8 +98,10 @@ Checklist before finishing any change (covers every endpoint):
   the button disables ("already running" tooltip); a curl run while the app
   still shows New → 409 banner + resync; agent whose script is not a JSON
   object with `links` (e.g. `{"nope":1}` or an md script) → 400 detail
-  banner; agent deleted via curl → "Agent not found" + resync; Completed /
-  Failed statuses appear on page re-entry (no live updates by design)
+  banner; agent deleted via curl → "Agent not found" + resync; the row
+  flips to Completed/Failed live when the WS agentStatus push lands and the
+  Agents page is visible (also flips to Running live for curl/other-user
+  runs); on any other page the status appears on re-entry
 - Agent data section: clicking an agent name (indigo underlined) → the
   section appears (subtitle goes blank) with its own "of N" count beside
   the data limit selector (no "Agent data" heading anywhere); URL / Fields
@@ -126,6 +128,18 @@ Checklist before finishing any change (covers every endpoint):
   "The selected agent no longer exists."; deleting the selected agent in the
   table clears the section; the two sections stay independently interactive
   (one loading never freezes the other); logout clears selection + section
+- No-agent data page: "No-agent data" `#pageButton` sits left of "Add agent"
+  on the Agents page and stays clickable during an agents fetch; clicking it
+  shows the page (neither header nav checked) with records whose agent was
+  deleted (seed via mongosh insert into `data`, then delete the agent via
+  curl — or use docs already orphaned); Agent column is plain text with the
+  deleted-agent tooltip; Fields links open `AgentDataDialog`, "—" cells are
+  inert; per-row trash + checkbox bulk deletes confirm (Cancel keeps rows)
+  and update the "of N" count; emptied last page clamps; limit selector
+  resets to page 1, Previous/Next respect bounds; "Back to agents" returns
+  with the Agents nav checked and the agents page reloaded; re-entering the
+  page refetches (delete an agent elsewhere → its docs appear on next
+  entry); backend down → banner + no wedge; logout clears the page
 - Notifications (temporary 15-min push; shorten with
   `NOTIFICATION_INTERVAL_SECONDS=3` on uvicorn): bell button left of the
   email button, no unread tint at login; a push flips the bell to the indigo
@@ -135,3 +149,11 @@ Checklist before finishing any change (covers every endpoint):
   reconnect attempts; kill uvicorn mid-session → app stays responsive, no
   wedge; restart uvicorn → the socket reconnects and a new push arrives
   (garbage token at the handshake → rejected, close 1008 / HTTP 403)
+- Agent-status pushes (crawl outcomes): a finished crawl flips the bell to
+  unread and lists `Agent "X" completed in N s (M records) · HH:MM` /
+  `Agent "X" failed after N s · HH:MM` newest-first; the Agents page (when
+  visible) refreshes itself — row status, Updated/Updated by, and the
+  selected agent's data pane pick up the outcome with no manual reload; a
+  run finishing while Dashboard/Settings is showing adds only the bell entry
+  (the row updates on re-entry); log out before completion → no bell entry,
+  no refresh

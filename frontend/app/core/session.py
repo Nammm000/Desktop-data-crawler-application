@@ -372,6 +372,22 @@ class SessionController(QObject):
 
         run_async(work, on_success or (lambda _page: None), on_error or (lambda _exc: None))
 
+    def list_orphaned_data(
+        self,
+        limit: int,
+        skip: int,
+        on_success: Callable[[AgentDataPage], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> AgentDataPage:
+            return self._authorized_call(
+                lambda token: self._client.list_orphaned_data(
+                    access_token=token, limit=limit, skip=skip
+                )
+            )
+
+        run_async(work, on_success or (lambda _page: None), on_error or (lambda _exc: None))
+
     def delete_data(
         self,
         data_id: str,

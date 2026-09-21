@@ -27,7 +27,7 @@ paths:
 | `users` | `USERS_COLLECTION` (`app/models/user.py`) | `user_service.create_user`, `user_service.update_password`, `user_service.list_users` / `update_user_status` / `update_user_role` (admin), `user_service.delete_user` / `delete_users` (admin) |
 | `refresh_tokens` | `REFRESH_TOKENS_COLLECTION` | `token_service` (issue / rotate / revoke / delete_for_users) |
 | `agents` | `AGENTS_COLLECTION` (`app/models/agent.py`) | `agent_service` (create / get / list / update / delete), `crawler_service` (status flips on run) |
-| `data` | `DATA_COLLECTION` (`app/models/data.py`) | `data_service.insert_many`, called by `crawler_service` (one doc per crawled page); read by `data_service.list_by_agent` (`GET /agents/{agentId}/data`); deleted by `data_service.delete_one` / `delete_many` (`DELETE /data/{dataId}`, `DELETE /data`) |
+| `data` | `DATA_COLLECTION` (`app/models/data.py`) | `data_service.insert_many`, called by `crawler_service` (one doc per crawled page); read by `data_service.list_by_agent` (`GET /agents/{agentId}/data`) and `data_service.list_orphaned` (`GET /data/orphaned`); deleted by `data_service.delete_one` / `delete_many` (`DELETE /data/{dataId}`, `DELETE /data`) |
 
 ```mermaid
 erDiagram
@@ -120,7 +120,8 @@ erDiagram
 One document per successfully crawled page, written by agent runs
 (`data_service.build_data_docs` + `insert_many`, called from
 `crawler_service.execute_crawl`) and read by the per-agent listing
-(`data_service.list_by_agent`).
+(`data_service.list_by_agent`) and the orphaned-data listing
+(`data_service.list_orphaned`).
 
 | Field | Type | Set how |
 |---|---|---|
@@ -220,6 +221,13 @@ when an index with the same name exists.
   listing (`list_by_agent`, `GET /agents/{agentId}/data`): newest first, `_id`
   tiebreaker keeps pagination deterministic (one run stamps all its docs with
   the same `crawledAt`); served by `idx_agent_crawled`.
+- `distinct("_id")` on `agents` + `find({"agentId": {"$nin": agent_ids}})`
+  (same sort/two-query shape as `list_by_agent`) — orphaned-data listing
+  (`list_orphaned`, `GET /data/orphaned`): data docs whose agent was hard-deleted
+  (no cascade). `$nin` cannot use `idx_agent_crawled` — accepted collection scan
+  until the collection grows (same tolerance as the in-memory listing sorts).
+  Recreating an agent with the same name never relinks orphans: the new agent
+  gets a fresh `_id`, docs keep the run-start snapshot `agentId`.
 - `delete_one({"_id": data_id})` / `delete_many({"_id": {"$in": ids}})` — data
   deletes (`delete_one` / `delete_many`, `DELETE /data/{dataId}` and
   `DELETE /data`); bulk returns `deletedCount`, so unknown ids simply don't count.

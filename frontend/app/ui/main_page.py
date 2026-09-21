@@ -23,6 +23,7 @@ from app.core.session import SessionController
 from app.ui.agent_management_page import AgentManagementPage
 from app.ui.dashboard_page import DashboardPage
 from app.ui.format import format_time
+from app.ui.orphaned_data_page import OrphanedDataPage
 from app.ui.settings_page import SettingsPage
 from app.ui.user_management_page import UserManagementPage
 
@@ -67,17 +68,23 @@ class MainPage(QWidget):
         self._agent_management_page = AgentManagementPage(session)
         self._settings_page = SettingsPage(session)
         self._user_management_page = UserManagementPage(session)
+        self._orphaned_data_page = OrphanedDataPage(session)
         self._body = QStackedWidget()
         self._body.addWidget(self._dashboard_page)
         self._body.addWidget(self._agent_management_page)
         self._body.addWidget(self._settings_page)
         self._body.addWidget(self._user_management_page)
+        self._body.addWidget(self._orphaned_data_page)
 
         self._dashboard_nav.clicked.connect(self._show_dashboard)
         self._agents_nav.clicked.connect(self._show_agents)
         self._dashboard_page.user_management_requested.connect(
             self._show_user_management
         )
+        self._agent_management_page.orphaned_data_requested.connect(
+            self._show_orphaned_data
+        )
+        self._orphaned_data_page.agent_management_requested.connect(self._show_agents)
         self._body.currentChanged.connect(self._on_body_page_changed)
         # Every session lands on Agents; the pageChanged handler syncs the
         # nav buttons (the reload inside it no-ops without a session).
@@ -111,6 +118,7 @@ class MainPage(QWidget):
         self._settings_page.set_user(None)
         self._agent_management_page.clear()
         self._user_management_page.clear()
+        self._orphaned_data_page.clear()
         # Preselect Agents so the next session opens there (the pageChanged
         # reload no-ops: the session is already torn down at this point).
         self._body.setCurrentWidget(self._agent_management_page)
@@ -126,6 +134,9 @@ class MainPage(QWidget):
     def _show_user_management(self) -> None:
         self._body.setCurrentWidget(self._user_management_page)
 
+    def _show_orphaned_data(self) -> None:
+        self._body.setCurrentWidget(self._orphaned_data_page)
+
     def _on_body_page_changed(self) -> None:
         current = self._body.currentWidget()
         self._dashboard_nav.setChecked(current is self._dashboard_page)
@@ -134,6 +145,8 @@ class MainPage(QWidget):
             self._user_management_page.reload()
         elif current is self._agent_management_page:
             self._agent_management_page.reload()
+        elif current is self._orphaned_data_page:
+            self._orphaned_data_page.reload()
 
     def _open_account_menu(self) -> None:
         menu = QMenu(objectName="accountMenu", parent=self)
@@ -151,6 +164,12 @@ class MainPage(QWidget):
         """Record a notification (oldest first, capped at 20) and flag unread."""
         self._notifications.append((message, created_at))
         self._set_unread(True)
+
+    def refresh_agents_if_visible(self) -> None:
+        """Live agents-page refresh on WS agent-status pushes; a no-op unless
+        the agents page is the current body page."""
+        if self._body.currentWidget() is self._agent_management_page:
+            self._agent_management_page.reload()
 
     def _set_unread(self, unread: bool) -> None:
         button = self._notification_button
