@@ -286,8 +286,9 @@ class OrphanedDataPage(QWidget):
             # or a stale checkbox/trash survives the repopulate.
             for col in (_COL_CHECK, _COL_DELETE):
                 self._table.removeCellWidget(row, col)
-            # Plain text, never a link: a same-name recreated agent never
-            # relinks (the doc's agentId points at the deleted one).
+            # Plain text, never a link: the backend nulls agentId when the
+            # agent is deleted — a same-name recreated agent (fresh _id)
+            # never relinks the doc.
             agent_item = QTableWidgetItem(item.agent_name or "—")
             agent_item.setToolTip(_AGENT_CELL_TOOLTIP)
             self._table.setItem(row, _COL_AGENT, agent_item)

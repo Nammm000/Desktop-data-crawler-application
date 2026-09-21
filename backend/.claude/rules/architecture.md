@@ -55,7 +55,8 @@ Mapping to response models happens only at the route boundary via
   (never at import time) → `admin.command("ping")` to fail fast on unreachable host or
   bad credentials → stash client/db on `app.state` → `ensure_indexes(db)` →
   `crawler_service.reset_interrupted_crawls` (flips agents orphaned in `Running` by a
-  restart to `Failed`).
+  restart to `Failed`) → `data_service.detach_dangling_agents` (nulls data-doc
+  `agentId`s matching no live agent).
 - **Lifespan shutdown** (`close_mongo`): `client.close()` if present.
 - **Middleware**: only `CORSMiddleware` — `allow_origins=settings.cors_origins_list`,
   `allow_credentials=False` (Bearer headers, not cookies), `allow_methods=["*"]`,
@@ -88,11 +89,13 @@ app/
 ├── schemas/data.py           # DataOut/DataList + delete request/result (+ from_doc boundary)
 ├── services/user_service.py  # create_user, get_by_email, get_by_id, update_password
 ├── services/token_service.py # issue/rotate/revoke refresh tokens, reuse detection
-├── services/agent_service.py # agent CRUD, _validate_script (json format check)
+├── services/agent_service.py # agent CRUD, _validate_script (json format check);
+│                             # delete cascades via data_service.detach_from_agent
 ├── services/crawler_service.py    # AgentScriptSpider, start_agent_crawl/execute_crawl,
 │                             # run-script validation, startup Running sweep
 ├── services/data_service.py  # build_data_docs + insert_many (crawl results), list_by_agent,
-│                             # list_orphaned (deleted-agent data), delete_one / delete_many
+│                             # list_orphaned (deleted-agent data), delete_one / delete_many,
+│                             # detach_from_agent (agent-delete cascade) + detach_dangling_agents (startup sweep)
 ├── services/connection_manager.py # shared WS registry (manager.broadcast)
 └── api/
     ├── deps.py               # bearer_scheme, DbDep, WsDbDep, CurrentUser, AdminUser (admin guard)
@@ -275,7 +278,10 @@ sequenceDiagram
 In-flight tasks live in `crawler_service._running_crawls` (strong refs +
 second re-run guard); the task's `finally` always deregisters. A server restart
 kills the crawl — the lifespan startup sweep flips orphaned `Running` agents to
-`Failed` so they can be re-run.
+`Failed` so they can be re-run. Deleting the agent mid-crawl is tolerated: the
+finishing crawl nulls its just-inserted docs' `agentId` (they land as orphans)
+and the status flip no-ops; the `detach_dangling_agents` startup sweep is the
+backstop for the crash window.
 
 ## Dependency injection (`app/api/deps.py`, `app/core/config.py`)
 

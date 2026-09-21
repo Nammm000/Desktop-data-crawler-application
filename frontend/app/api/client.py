@@ -74,7 +74,9 @@ class AgentPage:
 @dataclass(frozen=True)
 class AgentData:
     id: str
-    agent_id: str
+    # None on orphaned docs — the backend nulls agentId when the agent is
+    # deleted. Nothing in the UI reads this; the orphaned page shows agent_name.
+    agent_id: str | None
     agent_name: str
     url: str
     fields: dict[str, str | None]  # XPath name -> extracted value; None = no match

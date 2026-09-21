@@ -131,8 +131,9 @@ Checklist before finishing any change (covers every endpoint):
 - No-agent data page: "No-agent data" `#pageButton` sits left of "Add agent"
   on the Agents page and stays clickable during an agents fetch; clicking it
   shows the page (neither header nav checked) with records whose agent was
-  deleted (seed via mongosh insert into `data`, then delete the agent via
-  curl — or use docs already orphaned); Agent column is plain text with the
+  deleted (seed by running an agent then deleting it — or use docs already
+  orphaned; to prove the backend's startup sweep, mongosh-insert a doc with a
+  bogus string `agentId` and restart uvicorn); Agent column is plain text with the
   deleted-agent tooltip; Fields links open `AgentDataDialog`, "—" cells are
   inert; per-row trash + checkbox bulk deletes confirm (Cancel keeps rows)
   and update the "of N" count; emptied last page clamps; limit selector

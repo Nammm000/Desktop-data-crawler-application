@@ -53,8 +53,10 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
   read of the `data` collection for one agent (any authenticated user); unknown
   agent → 404, no runs yet → empty list
 - Orphaned-data listing (`GET /data/orphaned`): paginated newest-first read of
-  data docs whose agent has been deleted (any authenticated user); never 404s;
-  a recreated same-name agent never relinks them (`agentId` is a run-start snapshot)
+  data docs whose agent has been deleted (any authenticated user); deletion nulls
+  `agentId` (`agentName` preserved); never 404s; a recreated same-name agent never
+  relinks them (fresh `_id`, `null` never re-populated); a startup sweep
+  (`detach_dangling_agents`) nulls any dangling `agentId`
 - Data deletes (`DELETE /data/{dataId}` single → 204; `DELETE /data` + `{ids}`
   bulk → `{deleted: n}`): open to every authenticated user (no ownership model,
   matching agents); unknown ids in the bulk list simply don't count
@@ -86,10 +88,10 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 | GET | `/api/v1/agents` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 AgentList` `{agents, total}` | `401` |
 | GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` "Agent not found" |
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
-| DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
+| DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` (its data docs' `agentId` → `null`; `agentName` kept) | `401`, `404` |
 | GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl runs in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, too many links) |
 | GET | `/api/v1/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first) | `401`, `404` "Agent not found" |
-| GET | `/api/v1/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first; docs whose `agentId` matches no live agent) | `401`, `422` |
+| GET | `/api/v1/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first; docs whose agent was deleted — `agentId` is `null`) | `401`, `422` |
 | DELETE | `/api/v1/data` | Bearer | `{ids}` (list, ≥1) | `200 {deleted: n}` (unknown ids don't count) | `401`, `422` |
 | DELETE | `/api/v1/data/{dataId}` | Bearer | — | `204` | `401`, `404` "Data not found" |
 | WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` per interval plus `{"type":"agentStatus","agentId","agentName","status","createdAt"[,"runtimeSeconds","count","data"|"message"]}` frames on agent runs (broadcast to all clients) | handshake rejection (close 1008 → HTTP 403) |
@@ -155,7 +157,7 @@ never missing; `url` is the post-redirect final URL):
 ```json
 {
   "id": "<uuid string>",
-  "agentId": "<agent _id at run start>",
+  "agentId": "<agent _id at run start; null once the agent was deleted>",
   "agentName": "Post Fetcher v2",
   "url": "https://example.com/post/1",
   "fields": { "title": "Hello", "body": null },
@@ -249,8 +251,9 @@ backend/
 - No test suite.
 - `GET /agents/{agentId}/run` is a GET with side effects (explicit user choice);
   Bearer auth keeps prefetchers from triggering crawls.
-- Crawl-result docs survive agent deletion (no cascade) but are then unreachable
-  via `GET /agents/{agentId}/data` (unknown agent → 404) — `GET /data/orphaned`
+- Crawl-result docs survive agent deletion as explicit orphans: deletion nulls
+  their `agentId` (a startup sweep heals any dangling ids), they become unreachable
+  via `GET /agents/{agentId}/data` (unknown agent → 404), and `GET /data/orphaned`
   lists them instead; deleting them still requires the id-based delete endpoints.
 - A server restart (including `uvicorn --reload`) kills in-flight crawls; the
   startup sweep flips orphaned `Running` agents to `Failed`. Run without

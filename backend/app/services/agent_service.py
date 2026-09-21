@@ -9,6 +9,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.models.agent import AGENTS_COLLECTION, AgentFormat
 from app.schemas.agent import AgentCreate, AgentUpdate
+from app.services import data_service
 
 
 def _validate_script(format_: str, script: str) -> None:
@@ -107,6 +108,15 @@ async def update_agent(
 
 
 async def delete_agent(db: AsyncIOMotorDatabase, agent_id: str) -> bool:
-    """True when a document was removed; False when the id doesn't exist."""
+    """True when a document was removed; False when the id doesn't exist.
+    Deleting soft-orphans the agent's crawled data: agentId is nulled on
+    every data doc (agentName survives for display) so the docs keep
+    showing up in data_service.list_orphaned. Delete first, then detach —
+    docs inserted by a crawl finishing concurrently land before the detach
+    and are caught by it; anything slipping past is healed by the
+    detach_dangling_agents startup sweep."""
     result = await db[AGENTS_COLLECTION].delete_one({"_id": agent_id})
-    return result.deleted_count == 1
+    if result.deleted_count != 1:
+        return False
+    await data_service.detach_from_agent(db, agent_id)
+    return True

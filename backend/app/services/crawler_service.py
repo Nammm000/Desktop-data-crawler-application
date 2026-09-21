@@ -6,7 +6,8 @@ atomically flips the agent to "Running", broadcasts the status, then spawns
 agent (the route answers 202). `execute_crawl` drives a per-run
 AsyncCrawlerRunner in pure-asyncio mode (TWISTED_REACTOR_ENABLED=False — the
 default Twisted reactor would collide with uvicorn's loop), inserts one
-`data` doc per crawled page, then flips the agent to "Completed"/"Failed"
+`data` doc per crawled page (nulling their agentId when the agent was
+deleted mid-run), then flips the agent to "Completed"/"Failed"
 and broadcasts the outcome with the crawled data."""
 
 import asyncio
@@ -291,7 +292,15 @@ async def execute_crawl(
         docs = data_service.build_data_docs(agent_snapshot, results)
         if docs:  # pymongo rejects insert_many([]) — 0-item runs skip persistence
             await data_service.insert_many(db, docs)
-        await _set_agent_status(db, agent_id, AgentStatus.COMPLETED, acting_email)
+        agent = await _set_agent_status(
+            db, agent_id, AgentStatus.COMPLETED, acting_email
+        )
+        if agent is None:
+            # Deleted mid-crawl: delete_agent's detach ran before these docs
+            # were inserted, so they'd keep a dangling string agentId and be
+            # invisible to the null-based orphaned listing — detach them now
+            # (the startup sweep is the backstop if we crash right here).
+            await data_service.detach_from_agent(db, agent_id)
         await connection_manager.manager.broadcast(
             _status_frame(
                 frame_agent,

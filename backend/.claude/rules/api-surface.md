@@ -25,10 +25,10 @@ paths:
 | GET | `/api/v1/agents` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 AgentList` `{agents, total}` | `401` |
 | GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` |
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
-| DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
+| DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` (its data docs' `agentId` → `null`; `agentName` kept) | `401`, `404` |
 | GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, > `CRAWL_MAX_PAGES` links) |
 | GET | `/api/v1/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first) | `401`, `404` "Agent not found" |
-| GET | `/api/v1/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first; docs whose `agentId` matches no live agent) | `401`, `422` |
+| GET | `/api/v1/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first; docs whose agent was deleted — `agentId` is `null`) | `401`, `422` |
 | DELETE | `/api/v1/data` | Bearer | `{ids}` (list, ≥1) | `200 {deleted: n}` (unknown ids don't count) | `401`, `422` |
 | DELETE | `/api/v1/data/{dataId}` | Bearer | — | `204` | `401`, `404` "Data not found" |
 | WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` every `NOTIFICATION_INTERVAL_SECONDS` (def 900) plus `{"type":"agentStatus",...}` frames on agent runs (Completed/Failed carry `runtimeSeconds`) | handshake rejection (close 1008 → HTTP 403) |
@@ -70,15 +70,22 @@ When adding/removing/changing an endpoint, update this table and the README.
   and a broadcast frame. A GET with side effects by explicit user request —
   safe from prefetchers because it requires Bearer auth. Startup sweep
   (`reset_interrupted_crawls`) flips restart-orphaned `Running` agents to
-  `Failed`. Quirk: PATCHing an agent's status *to* `Running` without a crawl
+  `Failed`. If the agent is deleted mid-run, the finishing crawl nulls its
+  just-inserted docs' `agentId` so they still land as orphans. Quirk: PATCHing
+  an agent's status *to* `Running` without a crawl
   soft-locks runs (`409`) until it is patched back.
-- Data endpoints are open to every authenticated user (`CurrentUser`). Crawl
-  results survive agent deletion (no cascade): the per-agent listing 404s once
-  the agent is gone, while `GET /data/orphaned` (`data_service.list_orphaned`)
-  lists the survivors — `distinct` agent `_id`s + `{"agentId": {"$nin": ...}}`,
-  find + `count_documents` like every other listing. It never 404s (an empty
-  page just means nothing is orphaned) and a recreated same-name agent never
-  relinks orphans (`agentId` is a run-start snapshot). Declared before any
+- Data endpoints are open to every authenticated user (`CurrentUser`). Deleting
+  an agent soft-orphans its crawl results (`agent_service.delete_agent` →
+  `data_service.detach_from_agent`: `agentId` → `null` on every data doc,
+  `agentName` kept for display), so the per-agent listing 404s once the agent
+  is gone while `GET /data/orphaned` (`data_service.list_orphaned`) lists the
+  survivors — `find({"agentId": None})` + `count_documents` like every other
+  listing (the null equality is served by `idx_agent_crawled`, unlike the
+  `$nin` anti-join it replaced). It never 404s (an empty page just means
+  nothing is orphaned) and a recreated same-name agent never relinks orphans
+  (fresh `_id`; `null` is never re-populated). A startup sweep
+  (`data_service.detach_dangling_agents`) nulls any `agentId` matching no live
+  agent. Declared before any
   `GET /data/{dataId}` route would be (path-literal before path-param).
 - WS broadcast frames are flat camelCase dicts via the shared
   `connection_manager.manager` (registered by the notifications route):

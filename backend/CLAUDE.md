@@ -33,7 +33,7 @@ MongoDB via Motor. Config and primitives live in `core/`.
 
 ```
 app/
-├── main.py                   # FastAPI app: lifespan (Mongo connect + indexes), CORS, routers
+├── main.py                   # FastAPI app: lifespan (Mongo connect + indexes + startup sweeps), CORS, routers
 ├── core/config.py            # Settings from .env (pydantic-settings)
 ├── core/security.py          # bcrypt, JWT access tokens, refresh token primitives
 ├── db/mongo.py               # Motor client lifecycle, ensure_indexes(), get_db
@@ -43,9 +43,9 @@ app/
 ├── schemas/                  # Pydantic request/response models (camelCase aliases)
 ├── services/user_service.py  # user CRUD, duplicate detection, password updates
 ├── services/token_service.py # refresh token issue/rotate/revoke, reuse detection
-├── services/agent_service.py # agent CRUD, script JSON validation
+├── services/agent_service.py # agent CRUD, script JSON validation (delete cascades via data_service)
 ├── services/crawler_service.py   # Scrapy spider + run orchestration, WS status broadcasts
-├── services/data_service.py  # crawled-data persistence, per-agent/orphaned listings, deletes
+├── services/data_service.py  # crawled-data persistence, per-agent/orphaned listings, deletes, agent-delete detach
 ├── services/connection_manager.py # shared WS registry for backend broadcasts
 └── api/
     ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser

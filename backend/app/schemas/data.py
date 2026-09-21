@@ -12,7 +12,8 @@ class DataOut(_CamelModel):
     """One crawled page produced by an agent run."""
 
     id: str
-    agent_id: str
+    # Null once the agent was deleted (orphaned docs); agentName stays.
+    agent_id: str | None
     agent_name: str
     url: str
     # XPath field -> extracted value; None means no XPath in the script matched.

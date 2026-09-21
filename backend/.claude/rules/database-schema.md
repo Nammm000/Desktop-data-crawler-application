@@ -27,7 +27,7 @@ paths:
 | `users` | `USERS_COLLECTION` (`app/models/user.py`) | `user_service.create_user`, `user_service.update_password`, `user_service.list_users` / `update_user_status` / `update_user_role` (admin), `user_service.delete_user` / `delete_users` (admin) |
 | `refresh_tokens` | `REFRESH_TOKENS_COLLECTION` | `token_service` (issue / rotate / revoke / delete_for_users) |
 | `agents` | `AGENTS_COLLECTION` (`app/models/agent.py`) | `agent_service` (create / get / list / update / delete), `crawler_service` (status flips on run) |
-| `data` | `DATA_COLLECTION` (`app/models/data.py`) | `data_service.insert_many`, called by `crawler_service` (one doc per crawled page); read by `data_service.list_by_agent` (`GET /agents/{agentId}/data`) and `data_service.list_orphaned` (`GET /data/orphaned`); deleted by `data_service.delete_one` / `delete_many` (`DELETE /data/{dataId}`, `DELETE /data`) |
+| `data` | `DATA_COLLECTION` (`app/models/data.py`) | `data_service.insert_many`, called by `crawler_service` (one doc per crawled page); `data_service.detach_from_agent` (agentId → null on agent deletion + mid-crawl deletion) and `detach_dangling_agents` (startup sweep); read by `data_service.list_by_agent` (`GET /agents/{agentId}/data`) and `data_service.list_orphaned` (`GET /data/orphaned`); deleted by `data_service.delete_one` / `delete_many` (`DELETE /data/{dataId}`, `DELETE /data`) |
 
 ```mermaid
 erDiagram
@@ -65,7 +65,7 @@ erDiagram
     agents ||--o{ data : "agentId"
     data {
         string _id PK
-        string agentId FK
+        string agentId FK "nulled on agent delete"
         string agentName
         string url
         object fields
@@ -126,8 +126,8 @@ One document per successfully crawled page, written by agent runs
 | Field | Type | Set how |
 |---|---|---|
 | `_id` | str | `str(uuid.uuid4())` — string UUID, **never an ObjectId** |
-| `agentId` | str | the agent's `_id` at run start (snapshot) |
-| `agentName` | str | denormalized for display; keeps the name the crawl ran under even after renames |
+| `agentId` | str \| None | the agent's `_id` at run start (snapshot); nulled by `data_service.detach_from_agent` when the agent is deleted (or mid-crawl via `crawler_service`, or by the `detach_dangling_agents` startup sweep) |
+| `agentName` | str | denormalized for display; keeps the name the crawl ran under even after renames — deliberately survives agent deletion |
 | `url` | str | `response.url` — the **post-redirect** final URL, which may differ from the script link |
 | `fields` | obj | mirrors the script's keys (minus `links`) in script order; each value is the first matching XPath's text (element matches yield their XPath string-value) or `null` when no XPath matched — `null`, never missing |
 | `crawledAt` | datetime | tz-aware UTC; the same `now` for all docs of one run |
@@ -149,7 +149,7 @@ when an index with the same name exists.
 | `refresh_tokens` | `idx_user_revokes` | `{userId: ASCENDING}` | — | `update_many` family revocation (reuse detection, password change) |
 | `refresh_tokens` | `ttl_expires_at` | `{expiresAt: ASCENDING}` | TTL, `expireAfterSeconds=0` | background deletion of expired tokens |
 | `agents` | `uq_name` | `{name: ASCENDING}` | unique | duplicate-name 409s (race-proof, also catches renames on update); listing sorts in-memory until the collection grows |
-| `data` | `idx_agent_crawled` | `{agentId: ASCENDING, crawledAt: DESCENDING}` | — | newest-first data per agent (`GET /agents/{agentId}/data`); the `{agentId}` prefix also serves plain equality lookups |
+| `data` | `idx_agent_crawled` | `{agentId: ASCENDING, crawledAt: DESCENDING}` | — | newest-first data per agent (`GET /agents/{agentId}/data`); the `{agentId}` prefix also serves plain equality lookups and the `{"agentId": null}` equality of the orphaned listing |
 
 ## Query patterns
 
@@ -204,7 +204,11 @@ when an index with the same name exists.
   with a second `DuplicateKeyError` catch — renaming to a taken name conflicts
   **here**, not at insert. The read-merge-validate-write sequence is not atomic
   across concurrent PATCHes (last-write-wins, same tolerance as the rest of the codebase).
-- `delete_one({"_id": agent_id})` — delete.
+- `delete_one({"_id": agent_id})` — delete, followed by
+  `data_service.detach_from_agent(db, agent_id)` (nulls the agent's data docs'
+  `agentId`). Delete first, then detach: docs inserted by a crawl finishing
+  concurrently land before the detach and are caught by it; anything slipping
+  past is healed by the `detach_dangling_agents` startup sweep.
 - `find_one_and_update({"_id": agent_id, "status": {"$ne": "Running"}}, {$set: {status: "Running", ...}}, ReturnDocument.AFTER)` —
   the **atomic run claim** in `crawler_service.start_agent_crawl` (refresh-rotation
   idiom): concurrent run requests have exactly one winner; the loser re-reads to
@@ -221,13 +225,23 @@ when an index with the same name exists.
   listing (`list_by_agent`, `GET /agents/{agentId}/data`): newest first, `_id`
   tiebreaker keeps pagination deterministic (one run stamps all its docs with
   the same `crawledAt`); served by `idx_agent_crawled`.
-- `distinct("_id")` on `agents` + `find({"agentId": {"$nin": agent_ids}})`
-  (same sort/two-query shape as `list_by_agent`) — orphaned-data listing
-  (`list_orphaned`, `GET /data/orphaned`): data docs whose agent was hard-deleted
-  (no cascade). `$nin` cannot use `idx_agent_crawled` — accepted collection scan
-  until the collection grows (same tolerance as the in-memory listing sorts).
-  Recreating an agent with the same name never relinks orphans: the new agent
-  gets a fresh `_id`, docs keep the run-start snapshot `agentId`.
+- `update_many({"agentId": id}, {"$set": {"agentId": None}})` — `detach_from_agent`:
+  soft-orphaning on agent deletion (`agent_service.delete_agent`) and on mid-crawl
+  deletion (`crawler_service.execute_crawl` when the final status flip finds no
+  agent). `agentName` deliberately survives for the orphaned listing's display.
+- `find({"agentId": None})` (same sort/two-query shape as `list_by_agent`) —
+  orphaned-data listing (`list_orphaned`, `GET /data/orphaned`): orphans are
+  exactly the docs with `agentId` null (null equality also matches a missing
+  field, which never occurs — every doc is inserted with one). Index-served by
+  `idx_agent_crawled`, unlike the `$nin` anti-join this replaced. Recreating an
+  agent with the same name never relinks orphans: the new agent gets a fresh
+  `_id` and `null` is never re-populated.
+- `update_many({"agentId": {"$nin": agent_ids, "$ne": None}}, {"$set": {"agentId": None}})`
+  — `detach_dangling_agents` startup sweep (lifespan, next to
+  `reset_interrupted_crawls`): heals pre-cascade leftovers and the crash window
+  between a crawl's insert and its mid-crawl detach. Idempotent; `$ne: None`
+  keeps already-orphaned docs out of the write set. `$nin` cannot use
+  `idx_agent_crawled` — accepted as a startup-only scan.
 - `delete_one({"_id": data_id})` / `delete_many({"_id": {"$in": ids}})` — data
   deletes (`delete_one` / `delete_many`, `DELETE /data/{dataId}` and
   `DELETE /data`); bulk returns `deletedCount`, so unknown ids simply don't count.
@@ -268,8 +282,11 @@ Compose defines **only MongoDB** — the API runs via uvicorn on the host.
 ## Schema management
 
 No migrations, seeding scripts, or ODM. `ensure_indexes()` at startup is the only
-schema-management mechanism; documents are created inline in the services. Inspect
-data with:
+schema-management mechanism; documents are created inline in the services. Startup
+also runs two data-repair sweeps in the lifespan: `reset_interrupted_crawls`
+(flips restart-orphaned `Running` agents to `Failed`) and
+`detach_dangling_agents` (nulls data-doc `agentId`s matching no live agent).
+Inspect data with:
 
 ```bash
 docker compose exec mongo mongosh -u crawler -p crawlerpass --authenticationDatabase admin data_crawler

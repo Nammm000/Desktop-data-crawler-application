@@ -1,7 +1,9 @@
 """Persistence for the `data` collection — written by crawler runs, read by
-the per-agent data listing and the orphaned-data listing, deleted by the data
-endpoints."""
+the per-agent data listing and the orphaned-data listing, agent-detached
+(agentId -> null) on agent deletion and by the startup sweep, deleted by the
+data endpoints."""
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -11,10 +13,13 @@ from pymongo import DESCENDING
 from app.models.agent import AGENTS_COLLECTION
 from app.models.data import DATA_COLLECTION
 
+logger = logging.getLogger(__name__)
+
 
 def build_data_docs(agent: dict, results: list[dict]) -> list[dict]:
     """Map spider results ({"url", "fields"}) to `data` documents. Pure, no
-    I/O. `agent` is the at-run-start snapshot: {"id", "name"}."""
+    I/O. `agent` is the at-run-start snapshot: {"id", "name"} — the snapshot
+    agentId is nulled later if the agent is deleted (detach_from_agent)."""
     now = datetime.now(timezone.utc)
     return [
         {
@@ -60,14 +65,15 @@ async def list_orphaned(
     db: AsyncIOMotorDatabase, *, skip: int = 0, limit: int = 50
 ) -> tuple[list[dict], int]:
     """One page of crawled-data docs whose agent no longer exists (newest
-    first) plus the total count. agentId is a run-start snapshot with no
-    cascade, so deleting an agent orphans its docs; $nin against the live
-    agent _ids finds them (a recreated same-name agent never relinks — it
-    has a fresh _id). $nin cannot use idx_agent_crawled — accepted scan
-    until the collection grows (same tolerance as the other listings).
-    Ties on crawledAt break by _id, same idiom as list_by_agent."""
-    agent_ids = await db[AGENTS_COLLECTION].distinct("_id")
-    filter_ = {"agentId": {"$nin": agent_ids}}
+    first) plus the total count. Deleting an agent nulls agentId on its docs
+    (agent_service.delete_agent -> detach_from_agent), so orphans are exactly
+    the docs with agentId null (equality also matches a missing field, which
+    never occurs — every doc is inserted with one). Unlike the $nin anti-join
+    this replaces, the null equality is served by idx_agent_crawled.
+    agentName survives for display; a recreated same-name agent never relinks
+    (the new agent gets a fresh _id and null is never re-populated). Ties on
+    crawledAt break by _id, same idiom as list_by_agent."""
+    filter_ = {"agentId": None}
     cursor = (
         db[DATA_COLLECTION]
         .find(filter_)
@@ -91,3 +97,36 @@ async def delete_many(db: AsyncIOMotorDatabase, data_ids: list[str]) -> int:
     removed (unknown ids simply don't count)."""
     result = await db[DATA_COLLECTION].delete_many({"_id": {"$in": data_ids}})
     return result.deleted_count
+
+
+async def detach_from_agent(db: AsyncIOMotorDatabase, agent_id: str) -> int:
+    """Null agentId on every data doc of one agent (soft orphaning); return
+    how many were detached. agentName stays — the orphaned listing shows
+    "crawled by <name> (agent deleted)". Called by agent_service.delete_agent
+    and by crawler_service.execute_crawl when the agent vanished mid-run;
+    docs inserted concurrently after this runs are caught by the mid-crawl
+    detach or the detach_dangling_agents startup sweep."""
+    result = await db[DATA_COLLECTION].update_many(
+        {"agentId": agent_id}, {"$set": {"agentId": None}}
+    )
+    return result.modified_count
+
+
+async def detach_dangling_agents(db: AsyncIOMotorDatabase) -> int:
+    """Startup sweep: null agentId on data docs whose agent id matches no
+    live agent — pre-cascade leftovers plus the crash window between a
+    crawl's insert and its mid-crawl detach. Idempotent: steady state matches
+    nothing ($ne: None keeps already-orphaned docs — and a fresh install's
+    whole collection — out of the write set). $nin cannot use
+    idx_agent_crawled; accepted as a startup-only scan (the per-request
+    anti-join list_orphaned used to run scanned on every orphaned listing)."""
+    agent_ids = await db[AGENTS_COLLECTION].distinct("_id")
+    result = await db[DATA_COLLECTION].update_many(
+        {"agentId": {"$nin": agent_ids, "$ne": None}},
+        {"$set": {"agentId": None}},
+    )
+    if result.modified_count:
+        logger.warning(
+            "Detached %d data doc(s) from deleted agents", result.modified_count
+        )
+    return result.modified_count

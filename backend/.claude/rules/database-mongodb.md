@@ -29,7 +29,9 @@ paths:
   `agent_service._validate_script`, also on the merged PATCH view)
 - `data`: `{_id, agentId, agentName, url, fields: {field: value | null}, crawledAt}` —
   one doc per crawled page, written only by agent runs (`data_service`); `url` is the
-  post-redirect final URL; unmatched fields are `null`, never missing
+  post-redirect final URL; unmatched fields are `null`, never missing; `agentId` is
+  set to `null` (not removed) when the agent is deleted (`detach_from_agent`) and
+  `agentName` deliberately survives for the orphaned listing's display
 
 Rules:
 

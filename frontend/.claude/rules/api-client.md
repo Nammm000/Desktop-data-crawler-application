@@ -61,9 +61,11 @@ globs: ["app/api/**"]
   `crawledAt`) parses into `AgentData` / `AgentDataPage`; the data list sorts
   newest-first server-side. `list_orphaned_data` hits
   `GET /api/v1/data/orphaned` — same `DataOut` wire shape, so it reuses the
-  same parse; it NEVER 404s (an empty page just means no agent has been
+  same parse (orphaned docs arrive with `agentId: null`, so `agent_id` parses
+  as `None`); it NEVER 404s (an empty page just means no agent has been
   deleted) and supplements `list_agent_data`, which 404s once the agent is
-  gone. Orphaned docs never relink to a recreated same-name agent.
+  gone. Orphaned docs never relink to a recreated same-name agent (the
+  backend nulls `agentId` on deletion; a recreate gets a fresh id).
   `delete_data_items` sends `{"ids": [...]}` —
   unknown ids simply don't count — and reuses the deleted-count parse;
   `delete_data` is 204-never-parsed. Data docs survive agent deletion, but

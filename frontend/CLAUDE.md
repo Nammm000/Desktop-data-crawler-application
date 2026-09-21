@@ -134,8 +134,9 @@ app/
 - OrphanedDataPage ("No-agent data", all users): `session.list_orphaned_data`
   (`GET /api/v1/data/orphaned`) lists crawled records whose agent was deleted —
   the same `AgentDataPage` parse as the per-agent data, never 404s. `#dataTable`
-  with 6 columns: checkbox, Agent (plain text with tooltip — a same-name
-  recreated agent never relinks; the doc's `agentId` snapshot is dead), URL
+  with 6 columns: checkbox, Agent (plain text with tooltip — the backend nulls
+  `agentId` when the agent is deleted, so a same-name recreated agent never
+  relinks), URL
   (Stretch, tooltip), Fields (indigo link → `AgentDataDialog`, "—" inert),
   Crawled, per-row trash. "Back to agents" `#pageButton` in the title row emits
   `agent_management_requested` (MainPage wires both directions). Own

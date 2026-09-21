@@ -73,10 +73,10 @@ All routes are prefixed with `/api/v1`. JSON uses camelCase
 | GET | `/agents` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `AgentList` `{agents, total}` | `401` |
 | GET | `/agents/{agentId}` | Bearer | — | `200` `AgentOut` | `401`, `404` |
 | PATCH | `/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200` `AgentOut` | `400` invalid JSON script, `409` dup name, `404`, `422` |
-| DELETE | `/agents/{agentId}` | Bearer | — | `204` | `401`, `404` |
+| DELETE | `/agents/{agentId}` | Bearer | — | `204` (its data docs' `agentId` → `null`; `agentName` kept) | `401`, `404` |
 | GET | `/agents/{agentId}/run` | Bearer | — | `202` `AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` already running, `400` script not runnable |
 | GET | `/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `DataList` `{data, total}` (newest first) | `401`, `404` |
-| GET | `/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `DataList` `{data, total}` (newest first; records whose `agentId` matches no live agent) | `401`, `422` |
+| GET | `/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `DataList` `{data, total}` (newest first; records whose agent was deleted — `agentId` is `null`) | `401`, `422` |
 | DELETE | `/data` | Bearer | `{ids}` (list, ≥1) | `200` `{"deleted": n}` | `401`, `422` |
 | DELETE | `/data/{dataId}` | Bearer | — | `204` | `401`, `404` |
 | WS | `/notifications/ws?token=<accessToken>` | query token | — | ack `{"type":"connected"}`, then a `{"type":"notification","message","createdAt"}` frame every `NOTIFICATION_INTERVAL_SECONDS` (default 900) plus `{"type":"agentStatus", ...}` frames on agent runs (Completed/Failed carry `runtimeSeconds`) | handshake rejected with close code 1008 (invalid/expired token, inactive user) |
@@ -109,11 +109,12 @@ produced by an agent run (`fields` maps each script field to its extracted text 
 `null`; `url` is the post-redirect final URL). `GET /agents/{agentId}/data` lists
 an agent's records newest-first with `?limit=&skip=`, wrapped as
 `DataList` `{data, total}`; an agent with no runs returns an empty list, an unknown
-agent id returns `404`. Crawl results survive agent deletion (no cascade) and become
-unreadable via this endpoint once the agent is gone — list them with
-`GET /data/orphaned` instead (data docs whose `agentId` matches no live agent;
-recreating an agent with the same name does not relink them, the id is a run-start
-snapshot). Records are deleted with
+agent id returns `404`. Deleting an agent nulls `agentId` on its data docs
+(`agentName` is kept); they become unreadable via this endpoint (404) and are
+listed by `GET /data/orphaned` instead. A startup sweep (`data_service.
+detach_dangling_agents`) nulls any remaining `agentId` matching no live agent, so
+dangling ids can't hide. A recreated same-name agent never relinks them (fresh
+`_id`; `null` is never re-populated). Records are deleted with
 `DELETE /data/{dataId}` (single → `204`) or `DELETE /data` + `{ids}` (bulk →
 `{"deleted": n}`; unknown ids don't count) — no agent scoping on deletes.
 
@@ -186,7 +187,10 @@ curl -s $BASE/agents/<agentId>/run -H "Authorization: Bearer <accessToken>"
 # List the crawled data an agent produced (newest first, paginated)
 curl -s "$BASE/agents/<agentId>/data?limit=20&skip=0" -H "Authorization: Bearer <accessToken>"
 
-# List crawled data whose agent has been deleted (newest first, paginated)
+# Delete an agent: its crawled data survives with agentId nulled (orphaned)
+curl -s -X DELETE $BASE/agents/<agentId> -H "Authorization: Bearer <accessToken>"
+
+# List crawled data whose agent has been deleted — agentId is null (newest first)
 curl -s "$BASE/data/orphaned?limit=20&skip=0" -H "Authorization: Bearer <accessToken>"
 
 # Delete data documents: one by id, or many by ids (unknown ids don't count)
@@ -199,7 +203,7 @@ curl -s -X DELETE $BASE/data -H "Authorization: Bearer <accessToken>" \
 
 ```
 app/
-├── main.py                  # App factory: lifespan (Mongo connect + indexes), CORS, routers
+├── main.py                  # App factory: lifespan (Mongo connect + indexes + startup sweeps), CORS, routers
 ├── core/config.py           # Settings from .env (pydantic-settings)
 ├── core/security.py         # bcrypt hashing, JWT create/decode, refresh token primitives
 ├── db/mongo.py              # Motor client lifecycle, index bootstrap, get_db dependency
@@ -211,7 +215,7 @@ app/
 ├── services/token_service.py# Refresh token issue/rotate/revoke + reuse detection
 ├── services/agent_service.py# Agent CRUD + script JSON validation
 ├── services/crawler_service.py  # Scrapy spider + run orchestration (status flips, WS broadcast)
-├── services/data_service.py # data collection persistence for crawl results + per-agent/orphaned listings
+├── services/data_service.py # data collection persistence for crawl results + per-agent/orphaned listings + agent-delete detach
 ├── services/connection_manager.py # shared WS registry for backend broadcasts
 └── api/
     ├── deps.py              # get_current_user / get_current_admin dependencies
@@ -243,7 +247,8 @@ Collections:
   `{_id, agentId, agentName, url, fields: {field: value | null}, crawledAt}` with a
   compound `{agentId, crawledAt}` index. Written by agent runs and read by
   `GET /agents/{agentId}/data` (and `GET /data/orphaned` for docs whose agent was
-  deleted); unmatched fields are `null`, never missing.
+  deleted — `agentId` is nulled on deletion, `agentName` kept; a startup sweep
+  nulls any dangling ids); unmatched fields are `null`, never missing.
 
 ## Notes
 

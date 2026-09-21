@@ -111,8 +111,8 @@ globs: ["app/ui/**", "app/resources/**"]
   Dashboard→UserManagement precedent; neither header nav is checked while it
   is current). `QTableWidget#dataTable` with 6 columns — checkbox, Agent
   (plain text + tooltip "The agent this record was crawled by (now deleted)";
-  deliberately NOT a link — a same-name recreated agent never relinks, the
-  doc's `agentId` snapshot is dead), URL (Stretch, full URL tooltip), Fields
+  deliberately NOT a link — the backend nulls `agentId` on deletion, so a
+  same-name recreated agent never relinks the doc), URL (Stretch, full URL tooltip), Fields
   (same link/"—" rendering + `AgentDataDialog` open as the agent-data pane),
   Crawled, per-row trash. Own banner/progress/bulk bar
   (`#selectAllCheckBox` + `#dangerButton` "Delete selected (N)")/pagination
