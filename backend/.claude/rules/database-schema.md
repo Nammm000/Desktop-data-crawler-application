@@ -26,7 +26,8 @@ paths:
 |---|---|---|
 | `users` | `USERS_COLLECTION` (`app/models/user.py`) | `user_service.create_user`, `user_service.update_password`, `user_service.list_users` / `update_user_status` / `update_user_role` (admin), `user_service.delete_user` / `delete_users` (admin) |
 | `refresh_tokens` | `REFRESH_TOKENS_COLLECTION` | `token_service` (issue / rotate / revoke / delete_for_users) |
-| `agents` | `AGENTS_COLLECTION` (`app/models/agent.py`) | `agent_service` (create / get / list / update / delete), `crawler_service` (status flips on run) |
+| `agents` | `AGENTS_COLLECTION` (`app/models/agent.py`) | `agent_service` (create / get / list / update / delete), `crawler_service` (status flips + `lastRun` on run) |
+| `agent_secrets` | `AGENT_SECRETS_COLLECTION` (`app/models/agent.py`) | `agent_secret_service.set_credentials` / `clear_credentials` / `delete_for_agent` (cascade on agent delete); read by `get_metadata` (names/counts) and `decrypt_for_run` (crawl-time, decrypt in memory only) |
 | `data` | `DATA_COLLECTION` (`app/models/data.py`) | `data_service.insert_many`, called by `crawler_service` (one doc per crawled page); `data_service.detach_from_agent` (agentId → null on agent deletion + mid-crawl deletion) and `detach_dangling_agents` (startup sweep); read by `data_service.list_by_agent` (`GET /agents/{agentId}/data`) and `data_service.list_orphaned` (`GET /data/orphaned`); deleted by `data_service.delete_one` / `delete_many` (`DELETE /data/{dataId}`, `DELETE /data`) |
 
 ```mermaid
@@ -108,12 +109,38 @@ erDiagram
 | `_id` | str | `str(uuid.uuid4())` — string UUID, **never an ObjectId** |
 | `name` | str | from `AgentCreate`; 1–100 chars, whitespace-stripped by the Pydantic validator; unique (`uq_name`) |
 | `type` | str | constants class `AgentType` (`app/models/agent.py`), deliberately not an Enum; default `"one_post"` |
-| `status` | str | constants class `AgentStatus`; values `"New"` \| `"Running"` \| `"Completed"` \| `"Failed"`; default `"New"`; patchable like every other field, but `Running`/`Completed`/`Failed` are normally driven by `GET /agents/{agentId}/run` |
+| `sourceType` | str | `AgentSource`: `"generic"` (XPath spider, default) \| `"facebook"` (`FacebookPostSpider` with built-in post fields + optional overrides); written on create/PATCH, read by `_parse_run_script` and `execute_crawl` to pick the spider |
+| `status` | str | constants class `AgentStatus`; values `"New"` \| `"Running"` \| `"Completed"` \| `"Stopped"` \| `"Failed"`; default `"New"`; terminal flips happen in `execute_crawl` (`Stopped` when a stop was requested — partial data kept) and `reset_interrupted_crawls` (restart sweep → `Failed`) |
 | `format` | str | `"json"` \| `"xml"` \| `"md"` (`AgentFormat`) — describes how `script` should be parsed |
 | `script` | str | raw text content of a json/xml/md file; 1–1M chars; must parse via `json.loads` when format is `json` — enforced in `agent_service._validate_script` (also on the merged PATCH view) |
+| `hasCookies` | bool | set by `agent_secret_service.set_credentials` / `clear_credentials`; display-only flag — the values live (encrypted) in `agent_secrets` |
+| `hasProxies` | bool | same as `hasCookies`, proxy side |
+| `lastRun` | obj \| absent | written ATOMICALLY with the terminal status flip: `{startedAt, finishedAt, outcome: "Completed"\|"Stopped"\|"Failed", totalLinks, successCount, failureCount, failures: [{url, reason, detail?}]}` (capped at `MAX_RECORDED_FAILURES` = 100; reasons in `app/models/crawl.py`); absent on agents that never ran |
+| `stoppedBy` | str | email of the stop requester (`stop_agent_crawl`); survives the run |
 | `createdAt` | datetime | tz-aware UTC (`datetime.now(timezone.utc)`) |
 | `updatedAt` | datetime | same `now` as `createdAt`; reset by `update_agent` |
 | `updatedBy` | str | acting user's email — creator on insert, patcher on update; server-derived from `CurrentUser` (never accepted from the request body) |
+
+## `agent_secrets` document shape
+
+One document per agent WITH stored credentials, keyed by the agent's `_id`
+(no separate id). Written by `agent_secret_service`; hard-deleted when the
+credentials are cleared or the agent is deleted. **No route ever returns the
+plaintext** — it exists only inside `execute_crawl`'s stack frame after
+`decrypt_for_run`.
+
+| Field | Type | Set how |
+|---|---|---|
+| `_id` | str | the agent's `_id` (shared key, upsert) |
+| `cookiesEnc` | str | Fernet ciphertext of the raw cookie-header paste (empty string when only proxies are stored) |
+| `cookieNames` | list[str] | non-sensitive names (capped at 30) for the edit dialog's metadata endpoint |
+| `proxiesEnc` | str | Fernet ciphertext of the newline-separated proxy list (empty when only cookies are stored) |
+| `proxyCount` | int | number of stored proxies |
+| `updatedAt` / `updatedBy` | datetime / str | last credentials write |
+
+Losing/rotating `CREDENTIALS_ENCRYPTION_KEY` makes the ciphertext
+undecryptable — `decrypt_for_run` raises, the run endpoint returns 503 with a
+re-enter-the-credentials message.
 
 ## `data` document shape
 
@@ -129,12 +156,13 @@ One document per successfully crawled page, written by agent runs
 | `agentId` | str \| None | the agent's `_id` at run start (snapshot); nulled by `data_service.detach_from_agent` when the agent is deleted (or mid-crawl via `crawler_service`, or by the `detach_dangling_agents` startup sweep) |
 | `agentName` | str | denormalized for display; keeps the name the crawl ran under even after renames — deliberately survives agent deletion |
 | `url` | str | `response.url` — the **post-redirect** final URL, which may differ from the script link |
-| `fields` | obj | mirrors the script's keys (minus `links`) in script order; each value is the first matching XPath's text (element matches yield their XPath string-value) or `null` when no XPath matched — `null`, never missing |
+| `fields` | obj | mirrors the script's keys (minus `links`) in script order; each value is the first matching XPath's text (element matches yield their XPath string-value) or `null` when no XPath matched — `null`, never missing. Facebook agents instead carry the built-in/overridden field set (author, text, timestamp, reactions, comments, mediaUrls, permalink) |
 | `crawledAt` | datetime | tz-aware UTC; the same `now` for all docs of one run |
 
-Links that fail to download (non-2xx, timeout, DNS) produce no document — Scrapy
-drops them before `parse`; `count` in the WS Completed frame can be less than
-`len(links)`.
+Links that fail to download (non-2xx, timeout, DNS) or that get classified as
+a soft failure (login wall, checkpoint, nothing-matched) produce no document —
+each lands in the run's `lastRun.failures` with its reason instead;
+`count`/`successCount` can be less than `totalLinks`.
 
 ## Indexes (`ensure_indexes()` in `app/db/mongo.py`)
 

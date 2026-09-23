@@ -22,10 +22,14 @@ globs: ["app/api/**"]
 | `delete_user()` | `DELETE /api/v1/users/{id}` | Bearer | — | `None` (204, empty body) | `400` self-delete, `404`, `403` |
 | `delete_users()` | `DELETE /api/v1/users` | Bearer | `{userIds}` (min 1) | `int` (deleted count) | `400` self-in-list, `422`, `403` |
 | `list_agents()` | `GET /api/v1/agents?limit&skip` | Bearer | — | `AgentPage(agents, total)` | `422` bad params |
-| `create_agent()` | `POST /api/v1/agents` | Bearer | `{name, format, script}` | `201 Agent` | `409` dup name, `400` invalid JSON script, `422` |
-| `update_agent()` | `PATCH /api/v1/agents/{id}` | Bearer | `{name?, format?, script?}` (partial) | `Agent` | `409` dup name, `400` JSON check on merged script, `404`, `422` |
+| `create_agent()` | `POST /api/v1/agents` | Bearer | `{name, format, script, sourceType?}` | `201 Agent` | `409` dup name, `400` invalid JSON script, `422` |
+| `update_agent()` | `PATCH /api/v1/agents/{id}` | Bearer | `{name?, format?, script?, sourceType?}` (partial) | `Agent` | `409` dup name, `400` JSON check on merged script, `404`, `422` |
 | `delete_agent()` | `DELETE /api/v1/agents/{id}` | Bearer | — | `None` (204, empty body) | `404` |
-| `run_agent()` | `GET /api/v1/agents/{id}/run` | Bearer | — | `202 Agent` (status `Running`) | `404`, `409` already running, `400` script not runnable |
+| `run_agent()` | `GET /api/v1/agents/{id}/run` | Bearer | — | `202 Agent` (status `Running`) | `404`, `409` already running, `400` script not runnable (incl. non-facebook links on a facebook agent), `503` credentials undecryptable |
+| `stop_agent()` | `POST /api/v1/agents/{id}/stop` | Bearer | — | `202 Agent` (still `Running`; the Stopped outcome arrives via WS) | `404`, `409` not running |
+| `set_agent_credentials()` | `PUT /api/v1/agents/{id}/credentials` | Bearer | `{cookieHeader?, proxyText?}` (raw pastes) | `200 Agent` (flags updated; values stored encrypted, never returned) | `400` unparseable, `404`, `503` key unset |
+| `get_agent_credentials_metadata()` | `GET /api/v1/agents/{id}/credentials-metadata` | Bearer | — | `AgentCredentialsMeta(cookie_names, proxy_count, updated_at)` | `404` |
+| `clear_agent_credentials()` | `DELETE /api/v1/agents/{id}/credentials` | Bearer | — | `200 Agent` (flags cleared; idempotent) | `404` |
 | `list_agent_data()` | `GET /api/v1/agents/{id}/data?limit&skip` | Bearer | — | `AgentDataPage(data, total)` | `404` agent gone, `422` bad params |
 | `list_orphaned_data()` | `GET /api/v1/data/orphaned?limit&skip` | Bearer | — | `AgentDataPage(data, total)` | `422` bad params |
 | `delete_data()` | `DELETE /api/v1/data/{id}` | Bearer | — | `None` (204, empty body) | `404` |

@@ -15,6 +15,7 @@ from PySide6.QtCore import QObject, QSettings, Signal
 
 from app.api.client import (
     Agent,
+    AgentCredentialsMeta,
     AgentData,
     AgentDataPage,
     AgentPage,
@@ -35,13 +36,22 @@ class SessionController(QObject):
     session_ended = Signal(str)  # "" on manual logout, message otherwise
     auth_failed = Signal(str)  # login/signup error message
     backend_warning = Signal(str)  # non-fatal connectivity / database warning
-    tokens_rotated = Signal(str)  # new refresh token -> persisted on the GUI thread
+    tokens_rotated = Signal(
+        str, int
+    )  # (new refresh token, session generation) -> persisted on the GUI thread
 
     def __init__(self, client: ApiClient, parent=None):
         super().__init__(parent)
         self._client = client
         self._settings = QSettings()
-        self._lock = threading.Lock()
+        # Guards single-flight refresh ONLY (held across the network call —
+        # worker threads wait on it). Never taken by GUI-thread readers:
+        # the token attributes are atomically swapped, never mutated.
+        self._rotate_lock = threading.Lock()
+        # Bumped by every logout/force-logout; a rotation that completes on a
+        # worker thread afterwards belongs to a dead session and must never
+        # reach QSettings.
+        self._session_generation = 0
         self._access_token: str | None = None
         self._refresh_token: str | None = None
         self.user: User | None = None
@@ -54,7 +64,16 @@ class SessionController(QObject):
 
     # -- persistence (GUI thread only) --------------------------------------
 
-    def _persist_refresh_token(self, refresh_token: str) -> None:
+    def _persist_refresh_token(self, refresh_token: str, generation: int) -> None:
+        # Guard against the logout race: a rotation completing on a worker
+        # thread right after logout() cleared state would re-queue this
+        # write and resurrect the "logged out" session on next launch. The
+        # generation is compared on the GUI thread (same thread as logout),
+        # so the check cannot interleave with it.
+        if generation != self._session_generation:
+            return
+        if refresh_token != self._refresh_token:
+            return
         self._settings.setValue(_REFRESH_TOKEN_KEY, refresh_token)
 
     def _clear_persisted_refresh_token(self) -> None:
@@ -291,13 +310,18 @@ class SessionController(QObject):
         name: str,
         format: str,
         script: str,
+        source_type: str = "generic",
         on_success: Callable[[Agent], None] | None = None,
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
         def work() -> Agent:
             return self._authorized_call(
                 lambda token: self._client.create_agent(
-                    access_token=token, name=name, format=format, script=script
+                    access_token=token,
+                    name=name,
+                    format=format,
+                    script=script,
+                    source_type=source_type,
                 )
             )
 
@@ -309,6 +333,7 @@ class SessionController(QObject):
         name: str,
         format: str,
         script: str,
+        source_type: str = "generic",
         on_success: Callable[[Agent], None] | None = None,
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
@@ -320,6 +345,7 @@ class SessionController(QObject):
                     name=name,
                     format=format,
                     script=script,
+                    source_type=source_type,
                 )
             )
 
@@ -349,6 +375,71 @@ class SessionController(QObject):
         def work() -> Agent:
             return self._authorized_call(
                 lambda token: self._client.run_agent(
+                    access_token=token, agent_id=agent_id
+                )
+            )
+
+        run_async(work, on_success or (lambda _agent: None), on_error or (lambda _exc: None))
+
+    def stop_agent(
+        self,
+        agent_id: str,
+        on_success: Callable[[Agent], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> Agent:
+            return self._authorized_call(
+                lambda token: self._client.stop_agent(
+                    access_token=token, agent_id=agent_id
+                )
+            )
+
+        run_async(work, on_success or (lambda _agent: None), on_error or (lambda _exc: None))
+
+    def set_agent_credentials(
+        self,
+        agent_id: str,
+        cookie_header: str | None = None,
+        proxy_text: str | None = None,
+        on_success: Callable[[Agent], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> Agent:
+            return self._authorized_call(
+                lambda token: self._client.set_agent_credentials(
+                    access_token=token,
+                    agent_id=agent_id,
+                    cookie_header=cookie_header,
+                    proxy_text=proxy_text,
+                )
+            )
+
+        run_async(work, on_success or (lambda _agent: None), on_error or (lambda _exc: None))
+
+    def get_agent_credentials_metadata(
+        self,
+        agent_id: str,
+        on_success: Callable[[AgentCredentialsMeta], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> AgentCredentialsMeta:
+            return self._authorized_call(
+                lambda token: self._client.get_agent_credentials_metadata(
+                    access_token=token, agent_id=agent_id
+                )
+            )
+
+        run_async(work, on_success or (lambda _meta: None), on_error or (lambda _exc: None))
+
+    def clear_agent_credentials(
+        self,
+        agent_id: str,
+        on_success: Callable[[Agent], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        def work() -> Agent:
+            return self._authorized_call(
+                lambda token: self._client.clear_agent_credentials(
                     access_token=token, agent_id=agent_id
                 )
             )
@@ -426,9 +517,11 @@ class SessionController(QObject):
         return self._client
 
     def current_access_token(self) -> str | None:
-        """Thread-safe read of the in-memory access token (None while signed out)."""
-        with self._lock:
-            return self._access_token
+        """Lock-free read of the in-memory access token (None while signed
+        out). Called on the GUI thread (WebSocket reconnect path) — must
+        never wait on the refresh lock, which a worker can hold across the
+        whole (up to 10 s) network refresh."""
+        return self._access_token
 
     def refresh_access_token(
         self,
@@ -451,11 +544,16 @@ class SessionController(QObject):
 
     # -- token plumbing (worker threads) ------------------------------------
 
-    def _apply_pair(self, pair: TokenPair) -> None:
+    def _apply_pair(self, pair: TokenPair, generation: int | None = None) -> None:
+        # GUI-thread callers may omit the generation (logout cannot interleave
+        # there); worker callers pass the generation captured before their
+        # network call so a logout mid-flight discards the result wholesale.
+        if generation is not None and generation != self._session_generation:
+            return
         self._access_token = pair.access_token
         self._refresh_token = pair.refresh_token
         self.user = pair.user
-        self.tokens_rotated.emit(pair.refresh_token)
+        self.tokens_rotated.emit(pair.refresh_token, self._session_generation)
 
     def _rotate_tokens(self, stale_access: str | None = None) -> str:
         """Single-flight refresh; returns a valid access token. Worker threads only.
@@ -464,7 +562,8 @@ class SessionController(QObject):
         already rotated the pair meanwhile, we reuse its result instead of
         replaying the old refresh token (replay would revoke the whole family).
         """
-        with self._lock:
+        with self._rotate_lock:
+            generation = self._session_generation
             if (
                 stale_access is not None
                 and self._access_token
@@ -475,7 +574,7 @@ class SessionController(QObject):
             if not refresh_token:
                 raise ApiError(SESSION_EXPIRED_MESSAGE, 401)
             pair = self._client.refresh(refresh_token=refresh_token)
-            self._apply_pair(pair)
+            self._apply_pair(pair, generation)
             return self._access_token
 
     def _authorized_call(self, fn: Callable[[str], object]) -> object:
@@ -499,10 +598,17 @@ class SessionController(QObject):
             raise
 
     def _force_logout(self) -> None:
+        # A manual logout may have won the race against this in-flight 401 —
+        # the user is already on the login page, and a second session_ended
+        # would show a misleading "session expired" message.
+        if self._refresh_token is None and self.user is None:
+            return
         self._clear_session_state()
         self.session_ended.emit(SESSION_EXPIRED_MESSAGE)
 
     def _clear_session_state(self) -> None:
+        # Retires any rotation still in flight on a worker thread.
+        self._session_generation += 1
         self._access_token = None
         self._refresh_token = None
         self.user = None

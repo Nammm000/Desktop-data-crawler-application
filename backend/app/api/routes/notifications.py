@@ -54,11 +54,31 @@ async def notification_stream(
     manager.connect(websocket)
     try:
         while True:
-            await asyncio.sleep(settings.notification_interval_seconds)
+            # Race the interval sleep against an inbound frame so a client
+            # that vanishes is reaped immediately instead of only when the
+            # next (possibly 15-min-later) push fails.
+            receive_task = asyncio.create_task(websocket.receive_text())
+            sleep_task = asyncio.create_task(
+                asyncio.sleep(settings.notification_interval_seconds)
+            )
+            await asyncio.wait(
+                {receive_task, sleep_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if sleep_task.done():
+                receive_task.cancel()
+            else:
+                sleep_task.cancel()
+                if receive_task.exception() is not None:
+                    # WebSocketDisconnect / broken socket — handled below.
+                    raise receive_task.exception()
+                # A client message: the protocol is server-push only, so
+                # ignore it and keep pushing.
+                continue
+            minutes = settings.notification_interval_seconds // 60
             await websocket.send_json(
                 {
                     "type": "notification",
-                    "message": "15 minutes have passed",
+                    "message": f"{minutes} minutes have passed",
                     "createdAt": datetime.now(timezone.utc).isoformat(),
                 }
             )

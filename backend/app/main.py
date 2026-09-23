@@ -23,6 +23,15 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 
+# A placeholder JWT secret means anyone who has seen .env.example can forge
+# admin tokens — refuse to boot instead of running silently forgeable.
+if settings.jwt_secret == "CHANGE_ME":
+    raise RuntimeError(
+        "JWT_SECRET is still the placeholder. Generate one with "
+        'python3 -c "import secrets; print(secrets.token_urlsafe(48))" '
+        "and set it in backend/.env (or run: make setup)."
+    )
+
 app = FastAPI(title="Data Crawler API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(

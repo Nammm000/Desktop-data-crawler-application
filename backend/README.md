@@ -264,7 +264,14 @@ Collections:
 ## Future Work
 
 - Rate limiting on `/auth/login`
-- Tests (pytest + httpx against a test Mongo)
-- First-registered-user-becomes-admin bootstrap (or an admin CLI command)
+- Integration tests (pytest + httpx against a test Mongo) — the pure helpers
+  (`tests/test_pure_helpers.py`) already run with `.venv/bin/pytest tests/`
 - Last-admin protection (self-guard exists, but two admins can still demote each other)
 - Email verification / password reset flows
+
+Done since the last revision: first-signup-becomes-admin bootstrap (later
+signups are regular users), crawl stop/cancel (`POST /agents/{id}/stop`),
+per-link failure reasons on every run (`lastRun`), Facebook post agents
+(`sourceType: "facebook"` — cookies/proxies stored Fernet-encrypted in
+`agent_secrets`, never returned by the API), bcrypt moved off the event loop,
+and an http/https-only scheme allowlist for crawl links.

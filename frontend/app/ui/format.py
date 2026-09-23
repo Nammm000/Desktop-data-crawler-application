@@ -24,3 +24,26 @@ def format_role(role: str) -> str:
 
 def format_status(status: str) -> str:
     return status.capitalize() if status else "—"
+
+
+# Human labels for crawl failure reasons (kept in sync with the backend's
+# FailureReason constants — unknown future reasons fall back to the raw code).
+_FAILURE_REASONS = {
+    "broken_link": "Broken link (404)",
+    "rate_limited": "Rate limited (429)",
+    "http_error": "HTTP error",
+    "login_redirect": "Login required (redirected)",
+    "checkpoint": "Bot check / checkpoint",
+    "cookie_missing": "Login cookies missing",
+    "timeout": "Timed out",
+    "dns_error": "Host not found (DNS)",
+    "connection_error": "Connection failed",
+    "proxy_error": "Proxy failed",
+    "unexpected_html": "Page fetched but nothing matched",
+    "cancelled": "Cancelled",
+    "request_error": "Request failed",
+}
+
+
+def format_failure_reason(reason: str) -> str:
+    return _FAILURE_REASONS.get(reason, reason.replace("_", " ").capitalize())

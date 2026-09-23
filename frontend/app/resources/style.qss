@@ -297,6 +297,26 @@ QPushButton#pageButton {
     padding: 0 12px;
 }
 
+QPushButton#reloadButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+}
+
+QPushButton#reloadButton:hover {
+    background-color: #F3F4F6;
+    border-color: #E2E4EA;
+}
+
+QPushButton#reloadButton:pressed {
+    background-color: #E9EBF0;
+}
+
 QCheckBox#rowCheckBox,
 QCheckBox#selectAllCheckBox {
     background: transparent;
@@ -565,6 +585,10 @@ QLabel#pageTitle {
     color: #374151;
 }
 QLabel#pageSubtitle {
+    color: #6B7280;
+}
+QLabel#formHint {
+    font-size: 12px;
     color: #6B7280;
 }
 QLabel#pageIndicator {

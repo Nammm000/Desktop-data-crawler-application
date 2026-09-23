@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Response, status
 
 from app.api.deps import CurrentUser, DbDep
@@ -45,11 +47,13 @@ async def login(data: LoginRequest, db: DbDep) -> TokenPair:
     user = await user_service.get_by_email(db, data.email)
     if user is None:
         # Equalize timing with the password check that would have run.
-        dummy_password_check(data.password)
+        await asyncio.to_thread(dummy_password_check, data.password)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
-    if not verify_password(data.password, user["passwordHash"]):
+    if not await asyncio.to_thread(
+        verify_password, data.password, user["passwordHash"]
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
@@ -104,7 +108,9 @@ async def logout(data: LogoutRequest, db: DbDep) -> Response:
 async def change_password(
     data: ChangePasswordRequest, user: CurrentUser, db: DbDep
 ) -> TokenPair:
-    if not verify_password(data.current_password, user["passwordHash"]):
+    if not await asyncio.to_thread(
+        verify_password, data.current_password, user["passwordHash"]
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Current password is incorrect"
         )
@@ -114,7 +120,8 @@ async def change_password(
             detail="New password must be different from the current password",
         )
 
-    await user_service.update_password(db, user["_id"], hash_password(data.new_password))
+    new_hash = await asyncio.to_thread(hash_password, data.new_password)
+    await user_service.update_password(db, user["_id"], new_hash)
     # Kill every session; the current device gets a fresh pair in the response.
     await token_service.revoke_all_for_user(db, user["_id"])
     refresh = await token_service.issue_refresh_token(db, user["_id"])

@@ -46,13 +46,22 @@ def _agent_status_message(event: AgentStatusEvent) -> str:
     runtime = f"{event.runtime_seconds:.1f}s" if event.runtime_seconds is not None else ""
     if event.status == "Failed":
         suffix = f" after {runtime}" if runtime else ""
-        return f'Agent "{event.agent_name}" failed{suffix}'
+        return f'Agent "{event.agent_name}" failed{suffix}{_failed_suffix(event)}'
     records = ""
     if event.count is not None:
         records = f" ({event.count} record{'s' if event.count != 1 else ''})"
+    verb = "completed" if event.status == "Completed" else "stopped"
     if runtime:
-        return f'Agent "{event.agent_name}" completed in {runtime}{records}'
-    return f'Agent "{event.agent_name}" completed{records}'
+        return f'Agent "{event.agent_name}" {verb} in {runtime}{records}{_failed_suffix(event)}'
+    return f'Agent "{event.agent_name}" {verb}{records}{_failed_suffix(event)}'
+
+
+def _failed_suffix(event: AgentStatusEvent) -> str:
+    """Append '· N failed' when terminal frames report failed links."""
+    if event.last_run is None or event.last_run.failure_count <= 0:
+        return ""
+    failed = event.last_run.failure_count
+    return f" · {failed} link{'s' if failed != 1 else ''} failed"
 
 
 class MainWindow(QMainWindow):
@@ -96,6 +105,7 @@ class MainWindow(QMainWindow):
             lambda n: self._main_page.add_notification(n.message, n.created_at)
         )
         self._notifications.agent_status_received.connect(self._on_agent_status)
+        self._notifications.connection_established.connect(self._on_ws_connected)
 
     def _on_session_started(self, user) -> None:
         self._main_page.set_user(user)
@@ -118,10 +128,17 @@ class MainWindow(QMainWindow):
     def _on_agent_status(self, event: AgentStatusEvent) -> None:
         if self._session.user is None:
             return  # frame racing logout; MainPage was already reset
-        if event.status in ("Completed", "Failed"):
+        if event.status in ("Completed", "Stopped", "Failed"):
             self._main_page.add_notification(
                 _agent_status_message(event), event.created_at
             )
         # Refresh on every status frame (Running included): curl/other-user
         # runs also flip the row live.
+        self._main_page.refresh_agents_if_visible()
+
+    def _on_ws_connected(self) -> None:
+        if self._session.user is None:
+            return
+        # Frames broadcast while the socket was down are gone (no replay);
+        # resync in case a status flipped during the gap.
         self._main_page.refresh_agents_if_visible()

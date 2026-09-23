@@ -53,16 +53,47 @@ class UserPage:
 
 
 @dataclass(frozen=True)
+class AgentRunFailure:
+    url: str | None  # None for run-level entries (e.g. "not started")
+    reason: str  # broken_link | login_redirect | checkpoint | ...
+    detail: str | None
+
+
+@dataclass(frozen=True)
+class AgentLastRun:
+    started_at: datetime | None
+    finished_at: datetime | None
+    outcome: str  # "Completed" | "Stopped" | "Failed"
+    total_links: int
+    success_count: int
+    failure_count: int
+    failures: tuple[AgentRunFailure, ...]
+
+
+@dataclass(frozen=True)
 class Agent:
     id: str
     name: str
     type: str  # "one_post"
-    status: str  # "New"
+    status: str  # "New" | "Running" | "Completed" | "Stopped" | "Failed"
     format: str  # "json" | "xml" | "md"
     script: str
     created_at: datetime | None
     updated_at: datetime | None
     updated_by: str
+    source_type: str = "generic"  # "generic" | "facebook"
+    has_cookies: bool = False  # credentials stored? values never leave the API
+    has_proxies: bool = False
+    last_run: AgentLastRun | None = None
+
+
+@dataclass(frozen=True)
+class AgentCredentialsMeta:
+    """Non-secret summary of an agent's stored credentials."""
+
+    cookie_names: tuple[str, ...]
+    proxy_count: int
+    updated_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -99,11 +130,12 @@ class Notification:
 class AgentStatusEvent:
     agent_id: str
     agent_name: str
-    status: str  # "Running" | "Completed" | "Failed"
+    status: str  # "Running" | "Completed" | "Stopped" | "Failed"
     created_at: datetime | None
-    runtime_seconds: float | None  # Completed/Failed frames only
-    count: int | None  # Completed frames only
+    runtime_seconds: float | None  # terminal frames only
+    count: int | None  # Completed/Stopped frames only
     message: str | None  # Failed frames only
+    last_run: AgentLastRun | None = None  # terminal frames carry the summary
 
 
 def _parse_timestamp(raw) -> datetime | None:
@@ -143,6 +175,32 @@ def _parse_user_page(data: dict) -> UserPage:
     )
 
 
+def _parse_run_failure(data: dict) -> AgentRunFailure:
+    return AgentRunFailure(
+        url=data.get("url"),
+        reason=str(data.get("reason") or "unknown"),
+        detail=str(data["detail"]) if data.get("detail") else None,
+    )
+
+
+def _parse_last_run(data) -> AgentLastRun | None:
+    """Null-tolerant: an old backend (or a malformed frame) yields None."""
+    if not isinstance(data, dict) or not data.get("outcome"):
+        return None
+    failures = data.get("failures")
+    return AgentLastRun(
+        started_at=_parse_timestamp(data.get("startedAt")),
+        finished_at=_parse_timestamp(data.get("finishedAt")),
+        outcome=str(data["outcome"]),
+        total_links=int(data.get("totalLinks") or 0),
+        success_count=int(data.get("successCount") or 0),
+        failure_count=int(data.get("failureCount") or 0),
+        failures=tuple(_parse_run_failure(f) for f in failures if isinstance(f, dict))
+        if isinstance(failures, list)
+        else (),
+    )
+
+
 def _parse_agent(data: dict) -> Agent:
     return Agent(
         id=data["id"],
@@ -154,6 +212,10 @@ def _parse_agent(data: dict) -> Agent:
         created_at=_parse_timestamp(data.get("createdAt")),
         updated_at=_parse_timestamp(data.get("updatedAt")),
         updated_by=data.get("updatedBy", ""),
+        source_type=data.get("sourceType", "generic"),
+        has_cookies=bool(data.get("hasCookies", False)),
+        has_proxies=bool(data.get("hasProxies", False)),
+        last_run=_parse_last_run(data.get("lastRun")),
     )
 
 
@@ -216,6 +278,7 @@ def parse_agent_status(data: dict) -> AgentStatusEvent | None:
         runtime_seconds=float(runtime) if isinstance(runtime, (int, float)) else None,
         count=int(count) if isinstance(count, int) else None,
         message=str(data["message"]) if data.get("message") else None,
+        last_run=_parse_last_run(data.get("lastRun")),
     )
 
 
@@ -263,14 +326,20 @@ class ApiClient:
         except requests.RequestException:
             raise ApiError(f"Could not reach the server at {self.base_url}") from None
 
-        if response.status_code == 204 or not response.content:
+        if response.status_code == 204:
             return None
         try:
             payload = response.json()
         except ValueError:
+            # Error responses with an empty/non-JSON body (e.g. from a proxy
+            # or gateway) still carry their real status — an empty-body 401
+            # must be recognized as 401 so the caller can refresh.
             payload = None
 
         if response.ok:
+            # A 2xx with an empty body is a valid "no content" result.
+            if payload is None:
+                return None
             return payload
         raise ApiError(
             self._error_message(response.status_code, payload), response.status_code
@@ -419,12 +488,23 @@ class ApiClient:
         return _parse_or_fail(payload, _parse_agent_page)
 
     def create_agent(
-        self, *, access_token: str, name: str, format: str, script: str
+        self,
+        *,
+        access_token: str,
+        name: str,
+        format: str,
+        script: str,
+        source_type: str = "generic",
     ) -> Agent:
         payload = self._request(
             "POST",
             "/api/v1/agents",
-            json_body={"name": name.strip(), "format": format, "script": script},
+            json_body={
+                "name": name.strip(),
+                "format": format,
+                "script": script,
+                "sourceType": source_type,
+            },
             bearer=access_token,
         )
         return _parse_or_fail(payload, _parse_agent)
@@ -437,6 +517,7 @@ class ApiClient:
         name: str | None = None,
         format: str | None = None,
         script: str | None = None,
+        source_type: str | None = None,
     ) -> Agent:
         body: dict = {}
         if name is not None:
@@ -445,6 +526,8 @@ class ApiClient:
             body["format"] = format
         if script is not None:
             body["script"] = script
+        if source_type is not None:
+            body["sourceType"] = source_type
         payload = self._request(
             "PATCH", f"/api/v1/agents/{agent_id}", json_body=body, bearer=access_token
         )
@@ -460,6 +543,56 @@ class ApiClient:
         # background and its rows land in the data collection.
         payload = self._request(
             "GET", f"/api/v1/agents/{agent_id}/run", bearer=access_token
+        )
+        return _parse_or_fail(payload, _parse_agent)
+
+    def stop_agent(self, *, access_token: str, agent_id: str) -> Agent:
+        # 202; the agent is still "Running" in this body — the Stopped
+        # outcome (with partial data) arrives via the WebSocket broadcast.
+        payload = self._request(
+            "POST", f"/api/v1/agents/{agent_id}/stop", bearer=access_token
+        )
+        return _parse_or_fail(payload, _parse_agent)
+
+    def set_agent_credentials(
+        self,
+        *,
+        access_token: str,
+        agent_id: str,
+        cookie_header: str | None = None,
+        proxy_text: str | None = None,
+    ) -> Agent:
+        """Store cookies and/or proxies (Fernet-encrypted server-side).
+        Write-only: nothing ever reads them back."""
+        payload = self._request(
+            "PUT",
+            f"/api/v1/agents/{agent_id}/credentials",
+            json_body={"cookieHeader": cookie_header, "proxyText": proxy_text},
+            bearer=access_token,
+        )
+        return _parse_or_fail(payload, _parse_agent)
+
+    def get_agent_credentials_metadata(
+        self, *, access_token: str, agent_id: str
+    ) -> AgentCredentialsMeta:
+        payload = self._request(
+            "GET",
+            f"/api/v1/agents/{agent_id}/credentials-metadata",
+            bearer=access_token,
+        )
+        if not isinstance(payload, dict):
+            payload = {}
+        return AgentCredentialsMeta(
+            cookie_names=tuple(payload.get("cookieNames") or ()),
+            proxy_count=int(payload.get("proxyCount") or 0),
+            updated_at=_parse_timestamp(payload.get("updatedAt")),
+        )
+
+    def clear_agent_credentials(self, *, access_token: str, agent_id: str) -> Agent:
+        payload = self._request(
+            "DELETE",
+            f"/api/v1/agents/{agent_id}/credentials",
+            bearer=access_token,
         )
         return _parse_or_fail(payload, _parse_agent)
 

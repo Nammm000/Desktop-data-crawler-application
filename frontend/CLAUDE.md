@@ -34,10 +34,11 @@ thread via queued signals — workers never touch widgets.
 
 ```
 app/
-├── api/client.py               # ApiClient: all 21 endpoints, camelCase JSON, ApiError; websocket_url + parse_notification + parse_agent_status
+├── api/client.py               # ApiClient: all 25 endpoints, camelCase JSON, ApiError; websocket_url + parse_notification + parse_agent_status
 ├── core/worker.py              # run_async(): pool threads -> queued signals (GUI thread)
 ├── core/session.py             # SessionController: tokens, refresh, QSettings, forced logout
 ├── core/notifications.py       # NotificationClient: QWebSocket stream + 5 s reconnect (GUI thread)
+├── core/cookies.py             # cookie-header parse + paste preview (mirrors the backend parser)
 ├── ui/widgets.py               # PasswordLineEdit, chosen_combo (macOS-safe combos)
 ├── ui/login_page.py            # centered Sign in / Create account card (no header)
 ├── ui/dashboard_page.py        # placeholder text + admin-only User management card
@@ -45,16 +46,17 @@ app/
 ├── ui/agent_management_page.py # all users: landing page — splitter-stacked agent table (add/edit/delete/run) + per-agent data table
 ├── ui/user_management_page.py  # admin: paginated user table, role/status combos, delete
 ├── ui/change_password_dialog.py  # modal dialog (3 PasswordLineEdit fields)
-├── ui/agent_dialog.py          # modal Add/Edit agent form (script editor is the source of truth; json adds key-value rows + Generate JSON)
+├── ui/agent_dialog.py          # modal Add/Edit agent form (source picker; script editor is the source of truth; json adds key-value rows + Generate JSON; facebook mode adds cookies/proxies + clear-saved)
 ├── ui/agent_data_dialog.py     # read-only modal showing one crawled record (URL subtitle, crawled date, pretty-JSON fields viewer)
 ├── ui/orphaned_data_page.py    # all users: "No-agent data" — crawled records whose agent was deleted (view/delete, paginated)
 ├── ui/confirm_dialog.py        # ConfirmDialog.ask(): styled yes/no card (danger variant)
+├── ui/failures_dialog.py       # read-only lastRun failure reasons table
 ├── ui/format.py                # format_date / format_role / format_status / format_time
 ├── ui/main_page.py             # header (Dashboard + Agents nav left, bell + account email menu right)
 ├── ui/main_window.py           # QMainWindow: Loading / Login / Main stack; owns NotificationClient
 └── resources/
     ├── style.qss               # the only stylesheet (objectName selectors)
-    └── icons/                  # eye, eye-off, chevron-down, trash, check, plus, edit, play, plus-neutral, minus-neutral, bell (.svg)
+    └── icons/                  # eye, eye-off, chevron-down, trash, check, plus, edit, play, stop, plus-neutral, minus-neutral, bell, reload (.svg)
 ```
 
 ## Golden Rules
@@ -96,7 +98,10 @@ app/
   (`agent_status_received`) add a bell entry on Completed/Failed —
   `Agent "X" completed in N s (M records)` / `Agent "X" failed after N s` —
   and live-refresh the Agents page when it is the current page (every status
-  frame, so curl/other-user runs also flip the row)
+  frame, so curl/other-user runs also flip the row; a refresh landing mid-fetch
+  defers until the fetch settles, and the page resyncs on WS (re)connect —
+  `connection_established` — since frames broadcast while the socket was down
+  are not replayed)
 - Admin role/status edits go through the per-row combos in
   `UserManagementPage`; the current user's own row is plain text (the backend
   rejects self-changes)
@@ -110,7 +115,10 @@ app/
   Agent deletes confirm via `ConfirmDialog.ask(..., danger=True)` and run one
   at a time; an accepted create resets the page to page 1 (newest-first)
 - AgentManagementPage layout: the "Add agent" primaryButton sits right of
-  the "Agent management" pageTitle (no toolbar row); the agents table and
+  the "Agent management" pageTitle (no toolbar row); an icon-only
+  `#reloadButton` (reload.svg, 28×28, tooltip "Reload agents") hugs the title
+  on its right — a table action (disabled by `_set_loading`) wired to
+  `refresh()` (defers behind an in-flight fetch); the agents table and
   the data section stack in a vertical `#agentsSplitter` — drag the handle
   to reallocate height (panes never collapse; a one-shot `showEvent` seeds
   the old 3:2 split). There is no "Agent data" section title — the data

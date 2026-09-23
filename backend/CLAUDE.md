@@ -2,7 +2,7 @@
 
 FastAPI + MongoDB backend providing user management and JWT authentication
 (access tokens with rotating refresh tokens + reuse detection). Part of the
-`data-crawler` project; a sibling `frontend/` SPA will consume this API.
+`data-crawler` project; the sibling `frontend/` is a PySide6 desktop client.
 
 ## Environment
 
@@ -13,6 +13,7 @@ FastAPI + MongoDB backend providing user management and JWT authentication
 ## Commands
 
 ```bash
+.venv/bin/pytest tests/                               # run unit tests (pure helpers)
 docker compose up -d                                  # start MongoDB (check: docker compose ps -> healthy)
 .venv/bin/pip install -r requirements.txt             # install deps
 .venv/bin/uvicorn app.main:app --reload --port 8000   # run API (docs at /docs)
@@ -36,6 +37,7 @@ app/
 ├── main.py                   # FastAPI app: lifespan (Mongo connect + indexes + startup sweeps), CORS, routers
 ├── core/config.py            # Settings from .env (pydantic-settings)
 ├── core/security.py          # bcrypt, JWT access tokens, refresh token primitives
+├── core/encryption.py        # Fernet helpers for stored agent credentials
 ├── db/mongo.py               # Motor client lifecycle, ensure_indexes(), get_db
 ├── models/user.py            # UserRole enum, UserStatus constants, collection names
 ├── models/agent.py           # AgentType/AgentFormat/AgentStatus constants, AGENTS_COLLECTION
@@ -44,7 +46,9 @@ app/
 ├── services/user_service.py  # user CRUD, duplicate detection, password updates
 ├── services/token_service.py # refresh token issue/rotate/revoke, reuse detection
 ├── services/agent_service.py # agent CRUD, script JSON validation (delete cascades via data_service)
-├── services/crawler_service.py   # Scrapy spider + run orchestration, WS status broadcasts
+├── services/crawler_service.py   # generic spider + run orchestration (run/stop, lastRun), WS status broadcasts
+├── services/facebook_spider.py    # Facebook post spider (mbasic, cookies/proxies, failure classification)
+├── services/agent_secret_service.py  # encrypted credentials storage (agent_secrets)
 ├── services/data_service.py  # crawled-data persistence, per-agent/orphaned listings, deletes, agent-delete detach
 ├── services/connection_manager.py # shared WS registry for backend broadcasts
 └── api/

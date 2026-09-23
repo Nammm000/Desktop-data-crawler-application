@@ -29,6 +29,7 @@ from app.core.session import SessionController
 from app.ui.agent_data_dialog import AgentDataDialog
 from app.ui.agent_dialog import AgentDialog
 from app.ui.confirm_dialog import ConfirmDialog
+from app.ui.failures_dialog import FailuresDialog
 from app.ui.format import format_date, format_status
 from app.ui.widgets import chosen_combo
 
@@ -81,6 +82,8 @@ class AgentManagementPage(QWidget):
         self._pending_delete = False
         # A run request in flight; one at a time.
         self._pending_run = False
+        # A WS-triggered refresh deferred behind an in-flight fetch.
+        self._pending_refresh = False
         # Keep a delete error visible through the resync reload that follows it.
         self._preserve_banner = False
         # Row index -> Agent for the currently rendered page (name clicks).
@@ -124,6 +127,12 @@ class AgentManagementPage(QWidget):
         self._add_button.setIcon(QIcon(str(_ICONS_DIR / "plus.svg")))
         self._add_button.clicked.connect(self._open_create_dialog)
 
+        # A table action (unlike the nav buttons): disabled by _set_loading.
+        self._reload_button = QPushButton(objectName="reloadButton")
+        self._reload_button.setIcon(QIcon(str(_ICONS_DIR / "reload.svg")))
+        self._reload_button.setToolTip("Reload agents")
+        self._reload_button.clicked.connect(self._on_reload_clicked)
+
         # Navigation only — never disabled by _set_loading (a table fetch
         # must not block leaving the page, same as the header nav).
         self._orphaned_button = QPushButton("No-agent data", objectName="pageButton")
@@ -150,10 +159,12 @@ class AgentManagementPage(QWidget):
         self._page_indicator = QLabel("—", objectName="pageIndicator")
 
         # Add agent sits opposite the page title, not in its own toolbar row;
-        # No-agent data (a plain secondary) sits left of it.
+        # No-agent data (a plain secondary) sits left of it; reload hugs the
+        # title as an icon-only affordance.
         title_row = QHBoxLayout()
         title_row.setSpacing(8)
         title_row.addWidget(QLabel("Agent management", objectName="pageTitle"))
+        title_row.addWidget(self._reload_button)
         title_row.addStretch(1)
         title_row.addWidget(self._orphaned_button)
         title_row.addWidget(self._add_button)
@@ -294,7 +305,20 @@ class AgentManagementPage(QWidget):
         data_layout = QVBoxLayout(data_section)
         data_layout.setContentsMargins(0, 0, 0, 0)
         data_layout.setSpacing(12)
-        data_layout.addWidget(self._data_subtitle)
+        # Subtitle + per-run failure summary share one row: when the selected
+        # agent's last run had failed links, a "View reasons" button opens
+        # the failure dialog next to the (informative) subtitle text.
+        self._data_failures_button = QPushButton(
+            "View failure reasons", objectName="pageButton"
+        )
+        self._data_failures_button.clicked.connect(self._show_last_run_failures)
+        self._data_failures_button.hide()
+        subtitle_row = QHBoxLayout()
+        subtitle_row.setContentsMargins(0, 0, 0, 0)
+        subtitle_row.addWidget(self._data_subtitle)
+        subtitle_row.addStretch(1)
+        subtitle_row.addWidget(self._data_failures_button)
+        data_layout.addLayout(subtitle_row)
         data_layout.addWidget(self._data_error_banner)
         data_layout.addWidget(self._data_progress)
         data_layout.addWidget(self._data_body, 1)
@@ -325,6 +349,18 @@ class AgentManagementPage(QWidget):
             top = height * 3 // 5
             self._splitter.setSizes([top, height - top])
 
+    def refresh(self) -> None:
+        """Reload now, or as soon as the in-flight fetch settles (a WS push
+        can land mid-fetch, and that fetch may have read pre-flip status)."""
+        if self._loading:
+            self._pending_refresh = True
+        else:
+            self.reload()
+
+    def _on_reload_clicked(self) -> None:
+        if self._session.user is not None:
+            self.refresh()
+
     def reload(self) -> None:
         """Fetch the current page; a no-op while a fetch is already running."""
         if not self._loading and self._session.user is not None:
@@ -346,6 +382,7 @@ class AgentManagementPage(QWidget):
         self._total = 0
         self._pending_delete = False
         self._pending_run = False
+        self._pending_refresh = False
         self._row_agents = []
         self._set_loading(False)
         self._preserve_banner = False
@@ -385,6 +422,7 @@ class AgentManagementPage(QWidget):
                     break
             self._sync_data_subtitle()
         self._sync_pagination(page_count)
+        self._run_pending_refresh()
 
     def _on_load_failed(self, exc: Exception) -> None:
         self._set_loading(False)
@@ -399,6 +437,13 @@ class AgentManagementPage(QWidget):
         self._page_indicator.setText("—")
         self._prev_button.setEnabled(False)
         self._next_button.setEnabled(False)
+        self._run_pending_refresh()
+
+    def _run_pending_refresh(self) -> None:
+        """Flush a refresh deferred by refresh() once the fetch settled."""
+        if self._pending_refresh:
+            self._pending_refresh = False
+            self.reload()
 
     # -- pagination ---------------------------------------------------------------
 
@@ -431,6 +476,7 @@ class AgentManagementPage(QWidget):
         self._prev_button.setEnabled(not loading)
         self._next_button.setEnabled(not loading)
         self._add_button.setEnabled(not loading)
+        self._reload_button.setEnabled(not loading)
 
     # -- table rows ----------------------------------------------------------------
 
@@ -451,7 +497,12 @@ class AgentManagementPage(QWidget):
             name_font.setUnderline(True)
             name_item.setFont(name_font)
             name_item.setForeground(QColor("#4F46E5"))
-            name_item.setToolTip("View data created by this agent")
+            source_hint = (
+                "Facebook post agent"
+                if agent.source_type == "facebook"
+                else "Generic XPath agent"
+            )
+            name_item.setToolTip(f"{source_hint} — click to view its data")
             self._table.setItem(row, _COL_NAME, name_item)
             self._table.setItem(
                 row, _COL_FORMAT, QTableWidgetItem(agent.format.upper())
@@ -474,15 +525,22 @@ class AgentManagementPage(QWidget):
         self._table.resizeRowsToContents()
 
     def _run_button(self, agent: Agent) -> QPushButton:
+        """Play button — except while the agent runs, when it becomes a red
+        Stop button that cancels the in-flight crawl (partial data is kept)."""
         button = QPushButton(objectName="rowRunButton")
-        button.setIcon(QIcon(str(_ICONS_DIR / "play.svg")))
-        button.setFixedSize(28, 28)
         if agent.status == "Running":
-            button.setEnabled(False)
-            button.setToolTip("Agent is already running")
+            button.setIcon(QIcon(str(_ICONS_DIR / "stop.svg")))
+            button.setToolTip("Stop agent")
+            button.clicked.connect(
+                lambda _checked=False, a=agent: self._stop_agent(a)
+            )
         else:
+            button.setIcon(QIcon(str(_ICONS_DIR / "play.svg")))
             button.setToolTip("Run agent")
-        button.clicked.connect(lambda _checked=False, a=agent: self._run_agent(a))
+            button.clicked.connect(
+                lambda _checked=False, a=agent: self._run_agent(a)
+            )
+        button.setFixedSize(28, 28)
         return button
 
     def _edit_button(self, agent: Agent) -> QPushButton:
@@ -553,6 +611,34 @@ class AgentManagementPage(QWidget):
         self._preserve_banner = True
         self.reload()  # Resync (e.g. a stale row said "New" but it is running).
 
+    def _stop_agent(self, agent: Agent) -> None:
+        if self._busy():
+            return
+        self._set_loading(True)
+        self._session.stop_agent(
+            agent.id,
+            on_success=lambda _updated: self._on_stop_success(),
+            on_error=lambda exc: self._on_stop_failed(exc),
+        )
+
+    def _on_stop_success(self) -> None:
+        # The agent is still "Running" in the stop response — the Stopped
+        # outcome (with partial data) lands via the WS broadcast, so just
+        # resync the table when the call settles.
+        self._set_loading(False)
+        if self._session.user is None:
+            return
+        self.reload()
+
+    def _on_stop_failed(self, exc: Exception) -> None:
+        self._set_loading(False)
+        if self._session.user is None:
+            return
+        self._error_banner.setText(str(exc))
+        self._error_banner.show()
+        self._preserve_banner = True
+        self.reload()
+
     def _confirm_delete_agent(self, agent: Agent) -> None:
         if self._busy():
             return
@@ -612,6 +698,9 @@ class AgentManagementPage(QWidget):
         # Re-clicking the same name refetches page 1 — the manual data refresh.
         self._selected_agent = agent
         self._data_page_index = 0
+        # The subtitle (incl. the last-run failure summary) reflects the
+        # selection immediately — before the data fetch settles.
+        self._sync_data_subtitle()
         # A name click is an explicit "show me" — it always re-expands.
         self._data_collapsed = False
         self._apply_data_collapse()
@@ -704,10 +793,27 @@ class AgentManagementPage(QWidget):
         self._data_next_button.setEnabled(False)
 
     def _sync_data_subtitle(self) -> None:
+        """Empty-state caption / blank — plus the last-run failure summary
+        when the selected agent's most recent run had failed links."""
         if self._selected_agent is None:
             self._data_subtitle.setText(_DATA_EMPTY_CAPTION)
+            self._data_failures_button.hide()
+            return
+        last_run = self._selected_agent.last_run
+        if last_run is not None and last_run.failure_count > 0:
+            self._data_subtitle.setText(
+                f"Last run ({format_status(last_run.outcome).lower()}): "
+                f"{last_run.failure_count} of {last_run.total_links} links failed"
+            )
+            self._data_failures_button.show()
         else:
             self._data_subtitle.setText("")
+            self._data_failures_button.hide()
+
+    def _show_last_run_failures(self) -> None:
+        if self._selected_agent is None or self._selected_agent.last_run is None:
+            return
+        FailuresDialog(self._selected_agent, parent=self).exec()
 
     # -- data pagination -----------------------------------------------------------
 

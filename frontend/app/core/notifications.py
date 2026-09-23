@@ -27,6 +27,7 @@ _RECONNECT_DELAY_MS = 5_000
 class NotificationClient(QObject):
     notification_received = Signal(object)  # Notification
     agent_status_received = Signal(object)  # AgentStatusEvent
+    connection_established = Signal()  # every accepted handshake (re)connect
 
     def __init__(self, session: SessionController, parent: QObject | None = None):
         super().__init__(parent)
@@ -75,6 +76,7 @@ class NotificationClient(QObject):
 
     def _on_connected(self) -> None:
         self._handshake_done = True  # accept() implies auth passed
+        self.connection_established.emit()
 
     def _on_text_message(self, message: str) -> None:
         try:

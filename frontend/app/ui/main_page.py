@@ -169,7 +169,7 @@ class MainPage(QWidget):
         """Live agents-page refresh on WS agent-status pushes; a no-op unless
         the agents page is the current body page."""
         if self._body.currentWidget() is self._agent_management_page:
-            self._agent_management_page.reload()
+            self._agent_management_page.refresh()
 
     def _set_unread(self, unread: bool) -> None:
         button = self._notification_button

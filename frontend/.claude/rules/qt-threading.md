@@ -34,3 +34,6 @@ globs: ["app/core/**", "app/ui/**"]
 - Reconnects on a 5 s single-shot `QTimer`; a handshake rejection with an
   unchanged token triggers one `refresh_access_token()` (single-flight; a 401
   refresh failure force-logs-out, transport failures just retry later).
+- Every accepted handshake emits `connection_established` — `MainWindow`
+  answers with an agents-page resync, because one-shot frames broadcast
+  while the socket was down are not replayed.

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
@@ -13,12 +14,19 @@ from app.schemas.auth import SignupRequest
 
 async def create_user(db: AsyncIOMotorDatabase, data: SignupRequest) -> dict:
     now = datetime.now(timezone.utc)
+    # bcrypt is CPU-bound (~250ms at rounds=12): hash off the event loop so
+    # concurrent requests don't stall behind a signup.
+    password_hash = await asyncio.to_thread(hash_password, data.password)
+    # Bootstrap rule: the very first signup installs the admin; everyone
+    # after is a regular user. (Two racing first signups would both become
+    # admin — accepted for an internal tool.)
+    is_first = await db[USERS_COLLECTION].count_documents({}) == 0
     doc = {
         "_id": str(uuid.uuid4()),
         "username": data.username,
         "email": data.email,
-        "passwordHash": hash_password(data.password),
-        "role": UserRole.ADMIN.value,
+        "passwordHash": password_hash,
+        "role": UserRole.ADMIN.value if is_first else UserRole.USER.value,
         "status": UserStatus.ACTIVE,
         "createdAt": now,
         "updatedAt": now,

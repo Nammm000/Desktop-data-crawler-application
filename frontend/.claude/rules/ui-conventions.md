@@ -65,7 +65,11 @@ globs: ["app/ui/**", "app/resources/**"]
   `Running`; 409/400/404 land in the banner verbatim. The script is never a
   column (up to 1,000,000 chars) — the dialog owns it. The `primaryButton`
   "Add agent" (plus.svg) sits at the right of the "Agent management"
-  `pageTitle` row — no toolbar row. The page splits vertically:
+  `pageTitle` row — no toolbar row. An icon-only `#reloadButton` (reload.svg,
+  28×28, QSS-sized like the bell) hugs the title on its right: a table
+  action, so `_set_loading` disables it (unlike the No-agent data nav
+  button), and it calls `refresh()` — the deferred reload — so a click
+  mid-fetch is honored when the fetch settles. The page splits vertically:
   `QSplitter#agentsSplitter` (children not collapsible, 3:2 stretch factors,
   one-shot `showEvent` seeding the initial split) stacks the agents section
   above the data section; its QSS handle paints a 1px top-border line on a

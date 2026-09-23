@@ -22,18 +22,26 @@ from PySide6.QtWidgets import (
 )
 
 from app.api.client import Agent
+from app.core.cookies import cookie_preview, parse_cookie_header
 from app.core.session import SessionController
 from app.ui.widgets import OverlayScrollArea, chosen_combo
 
 _ICONS_DIR = Path(__file__).resolve().parent.parent / "resources" / "icons"
 
 _FORMAT_ITEMS = (("JSON", "json"), ("XML", "xml"), ("Markdown", "md"))
+_SOURCE_ITEMS = (
+    ("Generic (XPath script)", "generic"),
+    ("Facebook posts", "facebook"),
+)
 _MAX_NAME = 100
 _MAX_SCRIPT = 1_000_000
+_MAX_PROXIES = 20
 # The rows area is a fixed-height slot, so adding or removing rows never
 # resizes the dialog. Json mode stacks rows + Generate button + the 240px
 # editor, so the slot is smaller than the editor it sits above.
 _ROWS_HEIGHT = 160
+_COOKIES_HEIGHT = 72
+_PROXIES_HEIGHT = 56
 
 # Grid columns: key | remove-key | value | add-value | remove-value.
 _COLUMN_STRETCHES = (1, 0, 1, 0, 0)
@@ -81,6 +89,36 @@ class AgentDialog(QDialog):
 
         self._name_edit = QLineEdit(placeholderText="e.g. Product scraper")
         self._name_edit.setMaxLength(_MAX_NAME)
+        self._source_combo = chosen_combo("sourceCombo")
+        for label, value in _SOURCE_ITEMS:
+            self._source_combo.addItem(label, value)
+        # Credentials are write-only: on edit we show what IS stored (from
+        # the agent's flags + the metadata endpoint), never the values.
+        self._clear_credentials = False
+        self._cookies_edit = QPlainTextEdit(
+            placeholderText=(
+                "Paste the Cookie header from a logged-in Facebook tab "
+                '(e.g. c_user=…; xs=…; fr=…)'
+            )
+        )
+        self._cookies_edit.setFixedHeight(_COOKIES_HEIGHT)
+        self._cookies_preview = QLabel(objectName="formHint", wordWrap=True)
+        self._cookies_edit.textChanged.connect(self._sync_cookie_preview)
+        self._proxies_edit = QPlainTextEdit(
+            placeholderText="http://user:pass@proxy-host:port  (one per line)"
+        )
+        self._proxies_edit.setFixedHeight(_PROXIES_HEIGHT)
+        self._credentials_hint = QLabel(objectName="formHint", wordWrap=True)
+        self._credentials_hint.setText(
+            "Built-in fields: author, text, timestamp, reactions, comments, "
+            "mediaUrls, permalink. Script keys (optional) override them with "
+            "your own XPaths; links must be facebook.com https URLs."
+        )
+        self._saved_credentials_label = QLabel(objectName="formHint", wordWrap=True)
+        self._saved_credentials_label.hide()
+        self._clear_credentials_button = QPushButton("Clear saved credentials")
+        self._clear_credentials_button.clicked.connect(self._on_clear_credentials)
+        self._clear_credentials_button.hide()
         self._format_combo = chosen_combo("formatCombo")
         for label, value in _FORMAT_ITEMS:
             self._format_combo.addItem(label, value)
@@ -103,8 +141,22 @@ class AgentDialog(QDialog):
 
         if self._is_edit and agent is not None:
             self._name_edit.setText(agent.name)
-            self._format_combo.setCurrentIndex(self._format_combo.findData(agent.format))
+            # findData returns -1 for a value the combo doesn't know (e.g.
+            # a future backend value) — clamping keeps currentData() non-None
+            # so submit never sends "format": null.
+            stored_format_index = self._format_combo.findData(agent.format)
+            if stored_format_index < 0:
+                stored_format_index = 0
+            self._format_combo.setCurrentIndex(stored_format_index)
+            stored_source_index = self._source_combo.findData(
+                agent.source_type or "generic"
+            )
+            if stored_source_index < 0:
+                stored_source_index = 0
+            self._source_combo.setCurrentIndex(stored_source_index)
             self._script_edit.setPlainText(agent.script)
+            if agent.has_cookies or agent.has_proxies:
+                self._show_saved_credentials(agent)
 
         if self._format_combo.currentData() == "json":
             self._rebuild_entries(
@@ -114,6 +166,7 @@ class AgentDialog(QDialog):
         # Connected after populate + prefill: addItem()/setCurrentIndex() fire
         # this signal, and the initial mode is applied explicitly above.
         self._format_combo.currentIndexChanged.connect(self._on_format_changed)
+        self._source_combo.currentIndexChanged.connect(self._on_source_changed)
 
         submit_text = "Save changes" if self._is_edit else "Add agent"
         self._cancel_button = QPushButton("Cancel")
@@ -137,6 +190,11 @@ class AgentDialog(QDialog):
         root.setContentsMargins(24, 24, 24, 24)
         root.addWidget(card)
 
+        # After _form() built the credentials container: apply the initial
+        # visibility for the prefilled source (addItem/setCurrentIndex in the
+        # prefill fired the signal before the container existed).
+        self._apply_source_mode(self._source_combo.currentData(), initial=True)
+
     # -- construction helpers -------------------------------------------------
 
     def _form(self) -> QWidget:
@@ -146,10 +204,14 @@ class AgentDialog(QDialog):
         layout.setSpacing(6)
         for caption, edit in (
             ("Name", self._name_edit),
+            ("Source", self._source_combo),
             ("Format", self._format_combo),
         ):
             layout.addWidget(QLabel(caption, objectName="fieldCaption"))
             layout.addWidget(edit)
+        # Facebook-only credentials widgets sit below Format as siblings
+        # toggled by visibility (same pattern as the json builder below).
+        layout.addWidget(self._credentials_container())
         script_header = QHBoxLayout()
         script_header.addWidget(QLabel("Script", objectName="fieldCaption"))
         script_header.addWidget(self._add_key_button)
@@ -163,6 +225,24 @@ class AgentDialog(QDialog):
         layout.addWidget(self._generate_button)
         layout.addWidget(self._script_edit)
         return form
+
+    def _credentials_container(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(QLabel("Credentials (optional)", objectName="fieldCaption"))
+        layout.addWidget(self._cookies_edit)
+        layout.addWidget(self._cookies_preview)
+        layout.addWidget(self._proxies_edit)
+        saved_row = QHBoxLayout()
+        saved_row.addWidget(self._saved_credentials_label, 1)
+        saved_row.addWidget(self._clear_credentials_button)
+        layout.addLayout(saved_row)
+        layout.addWidget(self._credentials_hint)
+        container.hide()  # facebook mode shows it
+        self._credentials_container_widget = container
+        return container
 
     def _buttons_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -338,6 +418,71 @@ class AgentDialog(QDialog):
 
     # -- mode switching ---------------------------------------------------------
 
+    def _on_source_changed(self) -> None:
+        self._apply_source_mode(self._source_combo.currentData())
+
+    def _apply_source_mode(self, source: str, *, initial: bool = False) -> None:
+        facebook = source == "facebook"
+        self._credentials_container_widget.setVisible(facebook)
+        if not initial:
+            self._refit()
+
+    def _sync_cookie_preview(self) -> None:
+        self._cookies_preview.setText(
+            cookie_preview(self._cookies_edit.toPlainText())
+        )
+
+    def _show_saved_credentials(self, agent: Agent) -> None:
+        """Flag-based summary first; the metadata endpoint refines it
+        (cookie names) when it answers."""
+        parts = []
+        if agent.has_cookies:
+            parts.append("cookies")
+        if agent.has_proxies:
+            parts.append("proxies")
+        self._saved_credentials_label.setText(
+            f"Saved: {' + '.join(parts)} (never shown again)"
+        )
+        self._saved_credentials_label.show()
+        self._clear_credentials_button.show()
+        self._clear_credentials = False
+        self._clear_credentials_button.setText("Clear saved credentials")
+        self._session.get_agent_credentials_metadata(
+            agent.id,
+            on_success=lambda meta: self._on_credentials_meta(meta),
+            on_error=lambda _exc: None,  # flag summary stays; not critical
+        )
+
+    def _on_credentials_meta(self, meta) -> None:
+        if self._session.user is None:
+            return
+        parts = []
+        if meta.cookie_names:
+            names = ", ".join(meta.cookie_names[:4])
+            more = len(meta.cookie_names) - 4
+            suffix = f", … +{more}" if more > 0 else ""
+            parts.append(f"{len(meta.cookie_names)} cookies ({names}{suffix})")
+        if meta.proxy_count:
+            parts.append(f"{meta.proxy_count} proxies")
+        if not parts:
+            return
+        self._saved_credentials_label.setText(
+            f"Saved: {' + '.join(parts)} — never shown again"
+        )
+
+    def _on_clear_credentials(self) -> None:
+        if self._clear_credentials:
+            # Undo: the next submit keeps whatever is stored.
+            self._clear_credentials = False
+            self._clear_credentials_button.setText("Clear saved credentials")
+            self._saved_credentials_label.setText("Saved credentials kept.")
+            return
+        self._clear_credentials = True
+        self._clear_credentials_button.setText("Undo clear")
+        self._saved_credentials_label.setText(
+            "Saved credentials will be removed when you save."
+        )
+
     def _on_format_changed(self) -> None:
         fmt = self._format_combo.currentData()
         if fmt == self._mode:
@@ -461,6 +606,7 @@ class AgentDialog(QDialog):
             self._show_error(name_error)
             return
         fmt = self._format_combo.currentData()
+        source = self._source_combo.currentData() or "generic"
         # The editor is the source of truth in every format: json rows are a
         # builder whose output reaches the script only via Generate JSON.
         script = self._script_edit.toPlainText()
@@ -468,6 +614,11 @@ class AgentDialog(QDialog):
         if error:
             self._show_error(error)
             return
+        if source == "facebook":
+            error = self._validate_credentials()
+            if error:
+                self._show_error(error)
+                return
         self._clear_error()
         self._set_busy(True)
         if self._is_edit and self._agent is not None:
@@ -476,7 +627,8 @@ class AgentDialog(QDialog):
                 name,
                 fmt,
                 script,
-                on_success=lambda _agent: self._on_success(),
+                source_type=source,
+                on_success=lambda agent: self._after_agent_saved(agent),
                 on_error=lambda exc: self._on_error(exc),
             )
         else:
@@ -484,9 +636,63 @@ class AgentDialog(QDialog):
                 name,
                 fmt,
                 script,
-                on_success=lambda _agent: self._on_success(),
+                source_type=source,
+                on_success=lambda agent: self._after_agent_saved(agent),
                 on_error=lambda exc: self._on_error(exc),
             )
+
+    def _validate_credentials(self) -> str | None:
+        """Mirror the backend's cookie/proxy parsing so a bad paste never
+        leaves the dialog (the agent save would succeed, the credentials
+        call would 400)."""
+        cookie_text = self._cookies_edit.toPlainText().strip()
+        proxy_text = self._proxies_edit.toPlainText().strip()
+        if cookie_text and not parse_cookie_header(cookie_text):
+            return "No valid name=value pairs in the cookies field."
+        if proxy_text:
+            lines = [line.strip() for line in proxy_text.splitlines() if line.strip()]
+            bad = next(
+                (l for l in lines if not l.startswith(("http://", "https://"))), None
+            )
+            if bad:
+                return f"Proxy '{bad}' must be an http:// or https:// URL."
+            if len(lines) > _MAX_PROXIES:
+                return f"At most {_MAX_PROXIES} proxies can be stored."
+        return None  # empty credentials are fine (public pages need no login)
+
+    def _after_agent_saved(self, agent: Agent) -> None:
+        """The agent exists; now apply the credentials step (if any), then
+        close. Credentials failures keep the dialog open with a clear
+        message — the agent itself was saved."""
+        cookie_text = self._cookies_edit.toPlainText().strip()
+        proxy_text = self._proxies_edit.toPlainText().strip()
+        if cookie_text or proxy_text:
+            self._session.set_agent_credentials(
+                agent.id,
+                cookie_header=cookie_text or None,
+                proxy_text=proxy_text or None,
+                on_success=lambda _a: self._on_success(),
+                on_error=lambda exc: self._on_credentials_error(exc),
+            )
+            return
+        if self._clear_credentials:
+            self._session.clear_agent_credentials(
+                agent.id,
+                on_success=lambda _a: self._on_success(),
+                on_error=lambda exc: self._on_credentials_error(exc),
+            )
+            return
+        self._on_success()
+
+    def _on_credentials_error(self, exc: Exception) -> None:
+        self._set_busy(False)
+        if self._session.user is None:
+            self.reject()
+            return
+        self._show_error(
+            f"Agent saved, but the credentials failed: {exc} "
+            "Fix them and save again."
+        )
 
     def _on_success(self) -> None:
         # Close immediately: the reloaded table row behind the dialog is the
@@ -517,10 +723,14 @@ class AgentDialog(QDialog):
         self._busy = busy
         widgets = [
             self._name_edit,
+            self._source_combo,
             self._format_combo,
             self._script_edit,
             self._add_key_button,
             self._generate_button,
+            self._cookies_edit,
+            self._proxies_edit,
+            self._clear_credentials_button,
             self._cancel_button,
             self._submit_button,
         ]

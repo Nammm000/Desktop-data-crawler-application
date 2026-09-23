@@ -7,9 +7,9 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from app.models.agent import AGENTS_COLLECTION, AgentFormat
+from app.models.agent import AGENTS_COLLECTION, AgentFormat, AgentSource
 from app.schemas.agent import AgentCreate, AgentUpdate
-from app.services import data_service
+from app.services import agent_secret_service, data_service
 
 
 def _validate_script(format_: str, script: str) -> None:
@@ -37,9 +37,12 @@ async def create_agent(
         "_id": str(uuid.uuid4()),
         "name": data.name,
         "type": data.type,
+        "sourceType": data.source_type,
         "status": data.status,
         "format": data.format,
         "script": data.script,
+        "hasCookies": False,
+        "hasProxies": False,
         "createdAt": now,
         "updatedAt": now,
         "updatedBy": acting_email,
@@ -88,7 +91,10 @@ async def update_agent(
     current = await db[AGENTS_COLLECTION].find_one({"_id": agent_id})
     if current is None:
         return None
-    updates = data.model_dump(exclude_unset=True)
+    # by_alias: the wire is camelCase and so is the stored doc — e.g.
+    # source_type must land as `sourceType` (name/type/status/format/script
+    # are identical either way).
+    updates = data.model_dump(exclude_unset=True, by_alias=True)
     _validate_script(
         updates.get("format", current["format"]),
         updates.get("script", current["script"]),
@@ -118,5 +124,7 @@ async def delete_agent(db: AsyncIOMotorDatabase, agent_id: str) -> bool:
     result = await db[AGENTS_COLLECTION].delete_one({"_id": agent_id})
     if result.deleted_count != 1:
         return False
+    # Stored credentials (if any) go with the agent — never dangle secrets.
+    await agent_secret_service.delete_for_agent(db, agent_id)
     await data_service.detach_from_agent(db, agent_id)
     return True

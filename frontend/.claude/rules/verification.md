@@ -63,6 +63,12 @@ Checklist before finishing any change (covers every endpoint):
   count beside the limit selector (no count subtitle); the script never
   appears in the table; limit selector resets to
   page 1; Previous/Next respect bounds; `Page X of Y` matches `total`
+- Agents reload button: the icon-only reload button sits right of the
+  "Agent management" title (tooltip "Reload agents"); clicking it refetches
+  the table and the selected agent's data pane (e.g. a status flipped
+  elsewhere updates without page re-entry); it disables while a fetch runs
+  and re-enables after; the No-agent data button stays enabled during a
+  fetch (unchanged); while signed out it does nothing
 - Agents page divider: the "Add agent" button sits top-right beside the
   "Agent management" title; the splitter handle between the agents section
   and the data section drags to reallocate their heights (line turns indigo
@@ -157,4 +163,8 @@ Checklist before finishing any change (covers every endpoint):
   selected agent's data pane pick up the outcome with no manual reload; a
   run finishing while Dashboard/Settings is showing adds only the bell entry
   (the row updates on re-entry); log out before completion → no bell entry,
-  no refresh
+  no refresh; a fast crawl finishing while the run-triggered fetch is still
+  in flight must NOT leave the row on Running (the deferred refresh flushes
+  when the fetch settles); restart uvicorn mid-session → the page resyncs
+  on reconnect (a Running row flips to Failed via the startup sweep without
+  page re-entry)

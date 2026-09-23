@@ -21,17 +21,21 @@ paths:
 | PATCH | `/api/v1/users/{userId}/role` | Bearer (admin) | `{role}` admin/user | `200 UserOut` | `401`, `403`, `400` self-target, `404`, `422` |
 | DELETE | `/api/v1/users/{userId}` | Bearer (admin) | — | `204` | `401`, `403`, `400` self-target, `404` |
 | DELETE | `/api/v1/users` | Bearer (admin) | `{userIds}` (list, ≥1) | `200 {deleted: n}` | `401`, `403`, `400` self in list, `422` |
-| POST | `/api/v1/agents` | Bearer | `{name, format, script, type?, status?}` | `201 AgentOut` | `400` invalid JSON script, `409` dup name, `422` |
+| POST | `/api/v1/agents` | Bearer | `{name, format, script, type?, sourceType?, status?}` | `201 AgentOut` | `400` invalid JSON script, `409` dup name, `422` |
 | GET | `/api/v1/agents` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 AgentList` `{agents, total}` | `401` |
-| GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` |
-| PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
-| DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` (its data docs' `agentId` → `null`; `agentName` kept) | `401`, `404` |
-| GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, > `CRAWL_MAX_PAGES` links) |
+| GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` (carries `lastRun` when the agent has run) | `401`, `404` |
+| PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, sourceType, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
+| DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` (its data docs' `agentId` → `null`; stored credentials deleted) | `401`, `404` |
+| GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, > `CRAWL_MAX_PAGES` links, non-http(s) or — for `sourceType: facebook` — non-facebook links), `503` facebook credentials undecryptable |
+| POST | `/api/v1/agents/{agentId}/stop` | Bearer | — | `202 AgentOut` (still `Running` in the body; Stopped lands via the WS broadcast after in-flight requests settle) | `401`, `404`, `409` "Agent is not running" |
+| PUT | `/api/v1/agents/{agentId}/credentials` | Bearer | `{cookieHeader?, proxyText?}` (raw pastes; at least one) | `200 AgentOut` (`hasCookies`/`hasProxies` flags updated; values stored Fernet-encrypted, NEVER returned) | `400` unparseable cookies / bad proxy URL / >20 proxies / both empty, `404`, `503` `CREDENTIALS_ENCRYPTION_KEY` unset/invalid |
+| GET | `/api/v1/agents/{agentId}/credentials-metadata` | Bearer | — | `200 {cookieNames: [...], proxyCount, updatedAt}` (non-secret summary) | `401`, `404` |
+| DELETE | `/api/v1/agents/{agentId}/credentials` | Bearer | — | `200 AgentOut` (flags cleared; idempotent) | `401`, `404` |
 | GET | `/api/v1/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first) | `401`, `404` "Agent not found" |
 | GET | `/api/v1/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first; docs whose agent was deleted — `agentId` is `null`) | `401`, `422` |
 | DELETE | `/api/v1/data` | Bearer | `{ids}` (list, ≥1) | `200 {deleted: n}` (unknown ids don't count) | `401`, `422` |
 | DELETE | `/api/v1/data/{dataId}` | Bearer | — | `204` | `401`, `404` "Data not found" |
-| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` every `NOTIFICATION_INTERVAL_SECONDS` (def 900) plus `{"type":"agentStatus",...}` frames on agent runs (Completed/Failed carry `runtimeSeconds`) | handshake rejection (close 1008 → HTTP 403) |
+| WS | `/api/v1/notifications/ws` | query: `token` (access JWT) | — | ack `{"type":"connected"}`, then `{"type":"notification","message","createdAt"}` every `NOTIFICATION_INTERVAL_SECONDS` (def 900) plus `{"type":"agentStatus",...}` frames on agent runs (terminal Completed/Stopped/Failed frames carry `runtimeSeconds` and a `lastRun` summary with per-link `failures`; Completed/Stopped also carry `count` + `data`) | handshake rejection (close 1008 → HTTP 403) |
 
 When adding/removing/changing an endpoint, update this table and the README.
 
@@ -65,15 +69,50 @@ When adding/removing/changing an endpoint, update this table and the README.
   (`_parse_run_script`) → atomic Running claim (`find_one_and_update` with
   `status != Running` — the refresh-rotation idiom; race loser gets `409`) →
   broadcast a `Running` frame → `asyncio.create_task(execute_crawl)`. The task
-  registry `_running_crawls` double-guards re-runs (PATCH-proof). On finish:
-  one `data` doc per crawled page, status `Completed` (or `Failed` on crash),
-  and a broadcast frame. A GET with side effects by explicit user request —
-  safe from prefetchers because it requires Bearer auth. Startup sweep
-  (`reset_interrupted_crawls`) flips restart-orphaned `Running` agents to
-  `Failed`. If the agent is deleted mid-run, the finishing crawl nulls its
-  just-inserted docs' `agentId` so they still land as orphans. Quirk: PATCHing
-  an agent's status *to* `Running` without a crawl
-  soft-locks runs (`409`) until it is patched back.
+  registry `_running_crawls` (`_RunningCrawl`: task + runner + stop_requested)
+  double-guards re-runs (PATCH-proof) and backs `POST .../stop`. Every link
+  carries an errback that classifies download failures (`broken_link` 404,
+  `rate_limited` 429, `timeout`, `dns_error`, `connection_error`,
+  `proxy_error`, `cancelled`, … — constants in `app/models/crawl.py`). On
+  finish: one `data` doc per crawled page, a terminal status of `Completed` /
+  `Stopped` / `Failed`, a `lastRun` summary written ATOMICALLY with the status
+  flip (`{startedAt, finishedAt, outcome, totalLinks, successCount,
+  failureCount, failures: [{url, reason, detail?}]}`, capped at 100 entries),
+  and a broadcast frame carrying it. A GET with side effects by explicit user
+  request — safe from prefetchers because it requires Bearer auth. Startup
+  sweep (`reset_interrupted_crawls`) flips restart-orphaned `Running` agents
+  to `Failed` (with a `cancelled` lastRun entry). If the agent is deleted
+  mid-run, the finishing crawl nulls its just-inserted docs' `agentId` so they
+  still land as orphans. Quirk: PATCHing an agent's status *to* `Running`
+  without a crawl soft-locks runs (`409`) until it is patched back.
+- `POST /agents/{agentId}/stop` (`crawler_service.stop_agent_crawl`): marks
+  the in-flight run `stop_requested`, stamps `stoppedBy`, and calls
+  `crawler.stop()` on the live runner — a GRACEFUL close (in-flight requests
+  settle first, bounded by `DOWNLOAD_TIMEOUT`), then `execute_crawl`
+  finalizes as `Stopped` with partial data and `cancelled` failure entries
+  for never-fetched links. Re-running after `Stopped` is allowed (the claim
+  only excludes `Running`).
+- Agents have `sourceType: "generic" | "facebook"` (default `generic`).
+  Generic agents run `AgentScriptSpider` (XPath script against any allowed
+  http(s) site). Facebook agents run `FacebookPostSpider`
+  (`app/services/facebook_spider.py`): links must be https `*.facebook.com`
+  (rewritten onto `FACEBOOK_HOST`, default mbasic), script keys are OPTIONAL
+  per-field XPath overrides of the built-in post fields (author, text,
+  timestamp, reactions, comments, mediaUrls, permalink), per-request cookies
+  and round-robin proxies come from the stored (encrypted) credentials, and
+  responses are classified before extraction (`login_redirect`,
+  `cookie_missing`, `checkpoint`, `rate_limited`, `unexpected_html` when
+  nothing matched). Facebook runs use a gentle settings overlay (browser UA,
+  1 concurrent request, `FACEBOOK_DOWNLOAD_DELAY` randomized, AutoThrottle).
+- Credentials (`agent_secret_service`): raw cookie-header / proxy-list pastes
+  are parsed once, validated, and stored Fernet-encrypted
+  (`CREDENTIALS_ENCRYPTION_KEY`, `app/core/encryption.py`) in the
+  `agent_secrets` collection keyed by the agent `_id`. No route returns the
+  values — `AgentOut` carries only `hasCookies`/`hasProxies`; the edit dialog
+  gets names/counts via `GET .../credentials-metadata`. Deleting an agent
+  cascades the secret doc.
+- Signup roles: the FIRST signup (empty users collection) becomes `admin`;
+  every later signup is a regular `user`.
 - Data endpoints are open to every authenticated user (`CurrentUser`). Deleting
   an agent soft-orphans its crawl results (`agent_service.delete_agent` →
   `data_service.detach_from_agent`: `agentId` → `null` on every data doc,

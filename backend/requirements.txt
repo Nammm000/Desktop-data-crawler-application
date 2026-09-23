@@ -9,3 +9,4 @@ PyJWT==2.14.0
 bcrypt==5.0.0
 websockets==17.1
 scrapy==2.19.0
+cryptography==50.0.1
