@@ -14,7 +14,12 @@ class _CamelModel(BaseModel):
 # Wire values derived from the constants so the API contract and the stored
 # values cannot drift (same idiom as UserStatusValue).
 AgentTypeValue = Literal[AgentType.ONE_POST]
-AgentSourceValue = Literal[AgentSource.GENERIC, AgentSource.FACEBOOK]
+AgentSourceValue = Literal[
+    AgentSource.GENERIC,
+    AgentSource.FACEBOOK,
+    AgentSource.SOURCE_PAGES,
+    AgentSource.ECOMMERCE,
+]
 AgentFormatValue = Literal[AgentFormat.JSON, AgentFormat.XML, AgentFormat.MD]
 AgentStatusValue = Literal[
     AgentStatus.NEW,

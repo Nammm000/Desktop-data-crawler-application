@@ -16,6 +16,7 @@ FastAPI + MongoDB backend providing user management and JWT authentication
 .venv/bin/pytest tests/                               # run unit tests (pure helpers)
 docker compose up -d                                  # start MongoDB (check: docker compose ps -> healthy)
 .venv/bin/pip install -r requirements.txt             # install deps
+.venv/bin/playwright install chromium                 # one-time browser for source_pages agents (~120 MB)
 .venv/bin/uvicorn app.main:app --reload --port 8000   # run API (docs at /docs)
 curl -s localhost:8000/api/health                     # expect {"status":"ok","database":"up"}
 
@@ -48,6 +49,8 @@ app/
 ├── services/agent_service.py # agent CRUD, script JSON validation (delete cascades via data_service)
 ├── services/crawler_service.py   # generic spider + run orchestration (run/stop, lastRun), WS status broadcasts
 ├── services/facebook_spider.py    # Facebook post spider (mbasic, cookies/proxies, failure classification)
+├── services/source_pages_discovery.py  # source_pages agents: script parsing + Playwright listing-page link discovery (next_page/load_more clicking)
+├── services/ecommerce_spider.py   # ecommerce agents: two-phase product spider (listings -> products, pagination), plan parser, price/rating helpers
 ├── services/agent_secret_service.py  # encrypted credentials storage (agent_secrets)
 ├── services/data_service.py  # crawled-data persistence, per-agent/orphaned listings, deletes, agent-delete detach
 ├── services/connection_manager.py # shared WS registry for backend broadcasts

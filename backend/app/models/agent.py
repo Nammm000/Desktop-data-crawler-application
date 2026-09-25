@@ -9,6 +9,12 @@ class AgentSource:
 
     GENERIC = "generic"  # XPath script against any allowed http(s) site
     FACEBOOK = "facebook"  # built-in post extraction, cookies/proxies
+    # listing-page link discovery (Playwright: next_page/load_more clicking)
+    # feeding the generic XPath spider for the articles themselves
+    SOURCE_PAGES = "source_pages"
+    # two-phase product-catalog crawl: listing pages -> product pages,
+    # following the listing "next page" link automatically
+    ECOMMERCE = "ecommerce"
 
 
 class AgentFormat:

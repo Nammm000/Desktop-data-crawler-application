@@ -29,6 +29,7 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
 | PyJWT | 2.14.0 |
 | bcrypt (direct, never passlib) | 5.0.0 |
 | websockets (uvicorn WS protocol) | 17.1 |
+| Playwright (source_pages listing discovery) | 1.63.0 |
 | MongoDB | 8.0 via Docker (`mongo:8.0`) |
 
 ## Features
@@ -49,6 +50,29 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
   New → Running → Completed/Failed, persists one `data` doc per crawled page,
   and broadcasts status frames (Completed carries the crawled data) to all
   connected WebSocket clients
+- source_pages agents (`sourceType: "source_pages"`): instead of explicit
+  `links`, the run first discovers article links from listing pages in
+  headless Chromium (Playwright) — collecting via `post_link` XPaths and
+  clicking a `next_page` or `load_more` button (never both; optional
+  `max_next` cap) with randomized 3–120 s listing delays — then crawls the
+  unique discovered articles with the script's field XPaths like a generic
+  agent. Structure is validated on create/update AND at run start; a missing
+  pagination button is the normal end of pagination, a failing listing page
+  records a failure while the other source pages continue
+- ecommerce agents (`sourceType: "ecommerce"`): autonomous two-phase product
+  crawl of static-HTML shops — seeds are category/listing pages (`links`);
+  the spider discovers product links, follows the listing `next_page` link
+  automatically (missing link = normal end), dedupes products across pages
+  and only follows seed-hostname links, and extracts built-in product fields
+  on each detail page (title, price, currency, availability, rating,
+  category, imageUrl, description, productUrl — per-field script overrides,
+  transforms still applied). Caps: `max_next` per seed, `max_products` per
+  run (default/ceiling `ECOMMERCE_MAX_PRODUCTS`; hitting it drains the queue
+  for an exact cap). Politeness overlay: Chrome UA, randomized
+  `ECOMMERCE_DOWNLOAD_DELAY`, 2 concurrent, AutoThrottle — no Playwright.
+  `lastRun.totalLinks` counts discovered unique products; budget/cap/stop
+  truncations record `cancelled` entries. Built-ins target
+  books.toscrape.com — full strategy: `ECOMMERCE_CRAWLER_STRATEGY.md`
 - Crawl-result listing (`GET /agents/{agentId}/data`): paginated newest-first
   read of the `data` collection for one agent (any authenticated user); unknown
   agent → 404, no runs yet → empty list
@@ -207,6 +231,17 @@ Query params for `GET /agents` mirror `GET /users`.
 | `NOTIFICATION_INTERVAL_SECONDS` | `900` | notification push interval over the WS stream (tests shorten it) |
 | `CRAWL_TIMEOUT_SECONDS` | `600` | hard ceiling per agent crawl run (Scrapy `CLOSESPIDER_TIMEOUT`) |
 | `CRAWL_MAX_PAGES` | `200` | page cap per crawl run (Scrapy `CLOSESPIDER_PAGECOUNT`; more links than this is a `400`) |
+| `SOURCE_PAGES_DELAY_MIN_SECONDS` | `3` | source_pages agents: lower bound of the randomized listing-page navigation delay |
+| `SOURCE_PAGES_DELAY_MAX_SECONDS` | `120` | upper bound of the same delay (shorten both for manual testing) |
+| `SOURCE_PAGES_TIMEOUT_SECONDS` | `3600` | overall source_pages run deadline (Playwright discovery + article crawl) |
+| `SOURCE_PAGES_ARTICLE_DOWNLOAD_DELAY` | `1` | per-article Scrapy `DOWNLOAD_DELAY` for source_pages runs |
+| `ECOMMERCE_DOWNLOAD_DELAY` | `1` | ecommerce agents: per-request delay (randomized 0.5–1.5×) |
+| `ECOMMERCE_CONCURRENT_REQUESTS` | `2` | ecommerce agents: concurrent requests per domain |
+| `ECOMMERCE_MAX_PRODUCTS` | `100` | ecommerce agents: ceiling on unique products per run (a script's `max_products` may lower it, never raise it) |
+
+Playwright needs a one-time browser download for source_pages agents:
+`.venv/bin/playwright install chromium` (the API boots without it; a
+source_pages run finalizes as `Failed` with the install hint).
 
 ## Getting started
 

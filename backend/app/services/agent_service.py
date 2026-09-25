@@ -10,28 +10,52 @@ from pymongo.errors import DuplicateKeyError
 from app.models.agent import AGENTS_COLLECTION, AgentFormat, AgentSource
 from app.schemas.agent import AgentCreate, AgentUpdate
 from app.services import agent_secret_service, data_service
+from app.services.ecommerce_spider import parse_ecommerce_script
+from app.services.source_pages_discovery import parse_source_pages_script
 
 
-def _validate_script(format_: str, script: str) -> None:
+def _validate_script(
+    format_: str, script: str, source_type: str = AgentSource.GENERIC
+) -> None:
     """When the effective format is json, the effective script must parse.
     xml/md are stored as-is (no parser dependency). Called with the MERGED
     (old ∪ new) values on update so format/script switches are checked together.
+    source_pages and ecommerce scripts additionally get their STRUCTURE
+    checked here (the generic/facebook contracts stay run-time-only) so a
+    config with, say, both cap spellings is rejected at write time, not
+    first run.
     """
     if format_ != AgentFormat.JSON:
         return
     try:
-        json.loads(script)
+        parsed = json.loads(script)
     except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"script is not valid JSON: {exc.msg}",
         ) from exc
+    if source_type == AgentSource.SOURCE_PAGES:
+        if not isinstance(parsed, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="script must be a JSON object mapping field names to "
+                "XPath expressions",
+            )
+        parse_source_pages_script(parsed)  # raises 400 with its own detail
+    elif source_type == AgentSource.ECOMMERCE:
+        if not isinstance(parsed, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="script must be a JSON object mapping field names to "
+                "XPath expressions",
+            )
+        parse_ecommerce_script(parsed)  # raises 400 with its own detail
 
 
 async def create_agent(
     db: AsyncIOMotorDatabase, data: AgentCreate, acting_email: str
 ) -> dict:
-    _validate_script(data.format, data.script)
+    _validate_script(data.format, data.script, data.source_type)
     now = datetime.now(timezone.utc)
     doc = {
         "_id": str(uuid.uuid4()),
@@ -98,6 +122,7 @@ async def update_agent(
     _validate_script(
         updates.get("format", current["format"]),
         updates.get("script", current["script"]),
+        updates.get("sourceType", current.get("sourceType", AgentSource.GENERIC)),
     )
     updates["updatedAt"] = datetime.now(timezone.utc)
     updates["updatedBy"] = acting_email

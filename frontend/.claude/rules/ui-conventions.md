@@ -149,7 +149,19 @@ globs: ["app/ui/**", "app/resources/**"]
   value → string, multiple → array) into the editor; hand edits in the editor
   are never auto-overwritten. Submit validates the EDITOR text in every
   format: non-empty, ≤1,000,000 chars, plus a `json.loads` check in json mode
-  (hand edits can break it — mirror of the backend 400). Switching the combo
+  (hand edits can break it — mirror of the backend 400); when the Source combo
+  is on `source_pages`, the parsed JSON additionally passes the mirrored
+  structure checks (`_validate_source_pages_script`: required
+  `source_pages`/`post_link`, `next_page` XOR `load_more`, `max_next` int ≥ 1
+  with the `max_next_page` alias, reserved keys never treated as fields) with
+  the backend's exact detail strings in the banner; on `ecommerce` the same
+  mirroring applies via `_validate_ecommerce_script` (required `links`,
+  optional `product_link`/`next_page` XPaths, `max_next`/`max_products`
+  int ≥ 1 with the `max_next_page` alias, reserved keys never treated as
+  fields). A source_pages-only and an ecommerce-only
+  `formHint` label below the combos documents the reserved keys
+  (visibility-toggled by `_apply_source_mode`, same pattern as the facebook
+  credentials container). Switching the combo
   into json repopulates rows from the editor (`_script_to_entries`,
   empty/unparseable → empty rows); switching out is a no-op (the editor
   already holds the script). It closes immediately on success (the reloaded

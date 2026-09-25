@@ -81,7 +81,7 @@ class Agent:
     created_at: datetime | None
     updated_at: datetime | None
     updated_by: str
-    source_type: str = "generic"  # "generic" | "facebook"
+    source_type: str = "generic"  # "generic" | "facebook" | "source_pages" | "ecommerce"
     has_cookies: bool = False  # credentials stored? values never leave the API
     has_proxies: bool = False
     last_run: AgentLastRun | None = None

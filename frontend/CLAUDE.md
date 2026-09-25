@@ -46,7 +46,7 @@ app/
 ├── ui/agent_management_page.py # all users: landing page — splitter-stacked agent table (add/edit/delete/run) + per-agent data table
 ├── ui/user_management_page.py  # admin: paginated user table, role/status combos, delete
 ├── ui/change_password_dialog.py  # modal dialog (3 PasswordLineEdit fields)
-├── ui/agent_dialog.py          # modal Add/Edit agent form (source picker; script editor is the source of truth; json adds key-value rows + Generate JSON; facebook mode adds cookies/proxies + clear-saved)
+├── ui/agent_dialog.py          # modal Add/Edit agent form (source picker; script editor is the source of truth; json adds key-value rows + Generate JSON; facebook mode adds cookies/proxies + clear-saved; source_pages mode adds a reserved-keys hint + mirrored structure validation; ecommerce mode adds a script-keys hint + mirrored structure validation)
 ├── ui/agent_data_dialog.py     # read-only modal showing one crawled record (URL subtitle, crawled date, pretty-JSON fields viewer)
 ├── ui/orphaned_data_page.py    # all users: "No-agent data" — crawled records whose agent was deleted (view/delete, paginated)
 ├── ui/confirm_dialog.py        # ConfirmDialog.ask(): styled yes/no card (danger variant)
@@ -76,7 +76,14 @@ app/
   password 8–64 chars / ≤72 UTF-8 bytes, email format; agent name 1–100 chars
   stripped, script 1–1,000,000 chars — the script editor's text is submitted
   in every format; json mode adds a `json.loads` check and a Generate JSON
-  button that writes validated key-value rows into the editor) and blocks the
+  button that writes validated key-value rows into the editor; source_pages
+  json scripts additionally get the backend's structure rules mirrored in the
+  dialog — required `source_pages`/`post_link`, `next_page` XOR `load_more`,
+  `max_next` int ≥ 1 with the `max_next_page` alias, reserved keys excluded
+  from fields; ecommerce json scripts likewise — required `links`, optional
+  `product_link`/`next_page` XPaths, `max_next`/`max_products` int ≥ 1 with
+  the `max_next_page` alias, reserved keys excluded from fields — returning
+  the backend's exact detail strings) and blocks the
   request
 - The login page never shows a header; the header lives only in `MainPage`
 - The header nav is Dashboard + Agents, both for every authenticated user;

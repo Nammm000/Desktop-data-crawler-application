@@ -29,6 +29,23 @@ class Settings(BaseSettings):
     # delayed + randomized) to keep the account away from checkpoints.
     facebook_download_delay: float = 3.0
     facebook_host: str = "mbasic.facebook.com"
+    # source_pages agents: randomized delay bounds (seconds) applied to
+    # listing-page navigations ONLY (initial load, each next-page navigation,
+    # each load-more click — article pages use the gentler delay below); the
+    # overall run deadline (discovery + article crawl — the generic
+    # crawl_timeout_seconds would truncate runs that may spend ~2 min per
+    # navigation); the per-article Scrapy DOWNLOAD_DELAY.
+    source_pages_delay_min_seconds: float = 3.0
+    source_pages_delay_max_seconds: float = 120.0
+    source_pages_timeout_seconds: int = 3600
+    source_pages_article_download_delay: float = 1.0
+    # ecommerce agents: two-phase listing->product crawl of static-HTML
+    # shops (books.toscrape.com built-ins; no JS rendering). Politeness +
+    # the hard unique-product ceiling (a script's max_products may set a
+    # lower value, never higher).
+    ecommerce_download_delay: float = 1.0
+    ecommerce_concurrent_requests: int = 2
+    ecommerce_max_products: int = 100
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -168,3 +168,47 @@ Checklist before finishing any change (covers every endpoint):
   when the fetch settles); restart uvicorn mid-session → the page resyncs
   on reconnect (a Running row flips to Failed via the startup sweep without
   page re-entry)
+
+## Source-pages agents (sourceType "source_pages")
+
+- Add/Edit agent dialog: the Source combo offers "Source pages (listing to
+  articles)"; selecting it shows the reserved-keys hint and hides the facebook
+  credentials block (and vice versa)
+- A json script violating the structure (both `next_page` and `load_more`,
+  missing `source_pages` or `post_link`, `max_next` non-integer/`true`,
+  a field with a number value) is blocked client-side with the backend's
+  exact detail message — no request is sent
+- A valid source_pages script saves and runs; the row flips to Running
+  (source_pages runs take minutes by design — run uvicorn with
+  `SOURCE_PAGES_DELAY_MIN_SECONDS=0.5 SOURCE_PAGES_DELAY_MAX_SECONDS=2` to
+  speed up manual testing), then Completed via the WS push with records in
+  the data pane; the name tooltip reads "Source-pages agent (listing
+  discovery + article crawl)"
+- Stop mid-discovery (large SOURCE_PAGES_DELAY_MAX_SECONDS): the agent lands
+  Stopped with a `cancelled` lastRun entry; no chromium process survives
+  (`pgrep -f Chromium` clean)
+
+## E-commerce agents (sourceType "ecommerce")
+
+- Add/Edit agent dialog: the Source combo offers "E-commerce products
+  (listing to products)"; selecting it shows the script-keys hint (links +
+  optional product_link/next_page/max_next/max_products + field overrides)
+  and hides the facebook credentials block (and vice versa)
+- A json script violating the structure (missing/empty `links`, both
+  `max_next` spellings, `max_products` non-integer/`true`, a field with a
+  number value) is blocked client-side with the backend's exact detail
+  message — no request is sent
+- A valid ecommerce script saves and runs against books.toscrape.com (no
+  browser install needed; ~1 s per page — the Travel category's 11 products
+  finish in well under a minute): the row flips to Running, then Completed
+  via the WS push with 11 records in the data pane — every field populated
+  (`price` numeric like "26.08", `currency` "GBP", `rating` "1"–"5",
+  `imageUrl` absolute); the name tooltip reads "E-commerce product agent
+  (listing + product pages)"; `lastRun.totalLinks` is 11
+- Pagination + caps: the Nonfiction category (110 books) with
+  `{"max_next": 2, "max_products": 25}` completes with exactly 25 records,
+  `totalLinks` 25, and one `cancelled` "max_products" failure entry; a
+  `max_products` above `ECOMMERCE_MAX_PRODUCTS` (default 100) is a 400 at
+  run time
+- Stop mid-crawl: the agent lands Stopped; partial products are kept and a
+  `cancelled` entry counts the unfetched discovered products

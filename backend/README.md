@@ -23,12 +23,16 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# 3. Configure environment
+# 3. One-time browser download for source_pages agents (~120 MB;
+#    skip if you only use generic/facebook agents)
+playwright install chromium
+
+# 4. Configure environment
 cp .env.example .env
 # Edit .env and set JWT_SECRET, e.g.:
 #   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 
-# 4. Run the API
+# 5. Run the API
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -103,6 +107,39 @@ only the format to `json` against a stored non-JSON script is rejected). Names a
 unique (1–100 chars, whitespace-stripped). `updatedBy` records the email of the
 acting user — the creator on create, the patcher on update — and is set by the
 server, never accepted from the request body.
+
+### Source-pages agents (`sourceType: "source_pages"`)
+
+Instead of an explicit `links` list, the agent discovers article links from
+listing pages — optionally clicking a "next page" or "load more" button in a
+headless Chromium (Playwright) — then crawls the discovered articles with the
+remaining field XPaths exactly like a generic agent. Script contract:
+
+```json
+{
+  "source_pages": ["https://e.vnexpress.net/news/tech/tech-news"],
+  "post_link": "//*[contains(@class, 'title')]/a/@href",
+  "next_page": "//a[contains(@id, '_load_more')]",
+  "max_next": 3,
+  "title": ["//meta[@property='og:title']/@content", "//title"],
+  "published_time": "//meta[@property='article:published_time']/@content"
+}
+```
+
+- `source_pages` (required) — listing-page URLs; `post_link` (required) — one
+  XPath or a list (results are unioned, deduplicated across the whole run).
+- `next_page` OR `load_more` (optional, mutually exclusive — a script with
+  both is a `400` on create and on run) — button XPath to click. `max_next`
+  (optional, `max_next_page` accepted as an alias) caps navigations/clicks;
+  without it, pagination continues while the button exists.
+- Every other key is a field name mapped to one XPath or a fallback list,
+  extracted from each discovered article.
+- Listing-page navigations pause a randomized 3–120 s
+  (`SOURCE_PAGES_DELAY_MIN/MAX_SECONDS`) to look human; article pages crawl
+  under the gentler `SOURCE_PAGES_ARTICLE_DOWNLOAD_DELAY`. The whole run
+  (discovery + crawl) is bounded by `SOURCE_PAGES_TIMEOUT_SECONDS` (default
+  1 h) and `CRAWL_MAX_PAGES` unique links. Requires the one-time
+  `playwright install chromium`.
 
 `DataOut`: `{id, agentId, agentName, url, fields, crawledAt}` — one crawled page
 produced by an agent run (`fields` maps each script field to its extracted text or
@@ -215,6 +252,7 @@ app/
 ├── services/token_service.py# Refresh token issue/rotate/revoke + reuse detection
 ├── services/agent_service.py# Agent CRUD + script JSON validation
 ├── services/crawler_service.py  # Scrapy spider + run orchestration (status flips, WS broadcast)
+├── services/source_pages_discovery.py # source_pages agents: script parsing + Playwright listing-page link discovery (next_page/load_more clicking)
 ├── services/data_service.py # data collection persistence for crawl results + per-agent/orphaned listings + agent-delete detach
 ├── services/connection_manager.py # shared WS registry for backend broadcasts
 └── api/
@@ -274,4 +312,6 @@ signups are regular users), crawl stop/cancel (`POST /agents/{id}/stop`),
 per-link failure reasons on every run (`lastRun`), Facebook post agents
 (`sourceType: "facebook"` — cookies/proxies stored Fernet-encrypted in
 `agent_secrets`, never returned by the API), bcrypt moved off the event loop,
-and an http/https-only scheme allowlist for crawl links.
+an http/https-only scheme allowlist for crawl links, and source-pages agents
+(`sourceType: "source_pages"` — Playwright listing-page discovery with
+next_page/load_more clicking feeding the generic XPath spider).

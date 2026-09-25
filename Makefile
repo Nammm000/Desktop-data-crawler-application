@@ -9,6 +9,7 @@ help: ## Show this help
 
 setup: ## Create both venvs, install pinned deps, write backend/.env with fresh secrets
 	./scripts/init_env.sh
+	cd backend && .venv/bin/playwright install chromium
 
 up: ## Start everything: MongoDB -> API (:8000) -> desktop app
 	./run.sh

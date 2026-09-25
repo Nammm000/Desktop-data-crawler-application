@@ -109,7 +109,7 @@ erDiagram
 | `_id` | str | `str(uuid.uuid4())` — string UUID, **never an ObjectId** |
 | `name` | str | from `AgentCreate`; 1–100 chars, whitespace-stripped by the Pydantic validator; unique (`uq_name`) |
 | `type` | str | constants class `AgentType` (`app/models/agent.py`), deliberately not an Enum; default `"one_post"` |
-| `sourceType` | str | `AgentSource`: `"generic"` (XPath spider, default) \| `"facebook"` (`FacebookPostSpider` with built-in post fields + optional overrides); written on create/PATCH, read by `_parse_run_script` and `execute_crawl` to pick the spider |
+| `sourceType` | str | `AgentSource`: `"generic"` (XPath spider, default) \| `"facebook"` (`FacebookPostSpider` with built-in post fields + optional overrides) \| `"source_pages"` (Playwright listing-page discovery feeding `AgentScriptSpider`) \| `"ecommerce"` (`EcommerceProductSpider`: two-phase listing→product crawl with pagination following, caps and built-in product fields — see `ECOMMERCE_CRAWLER_STRATEGY.md`); written on create/PATCH (source_pages AND ecommerce scripts also structure-checked at write time), read by `_parse_run_script` / `_parse_source_pages_run_script` / `_parse_ecommerce_run_script` and `execute_crawl` to pick the strategy |
 | `status` | str | constants class `AgentStatus`; values `"New"` \| `"Running"` \| `"Completed"` \| `"Stopped"` \| `"Failed"`; default `"New"`; terminal flips happen in `execute_crawl` (`Stopped` when a stop was requested — partial data kept) and `reset_interrupted_crawls` (restart sweep → `Failed`) |
 | `format` | str | `"json"` \| `"xml"` \| `"md"` (`AgentFormat`) — describes how `script` should be parsed |
 | `script` | str | raw text content of a json/xml/md file; 1–1M chars; must parse via `json.loads` when format is `json` — enforced in `agent_service._validate_script` (also on the merged PATCH view) |
@@ -156,7 +156,7 @@ One document per successfully crawled page, written by agent runs
 | `agentId` | str \| None | the agent's `_id` at run start (snapshot); nulled by `data_service.detach_from_agent` when the agent is deleted (or mid-crawl via `crawler_service`, or by the `detach_dangling_agents` startup sweep) |
 | `agentName` | str | denormalized for display; keeps the name the crawl ran under even after renames — deliberately survives agent deletion |
 | `url` | str | `response.url` — the **post-redirect** final URL, which may differ from the script link |
-| `fields` | obj | mirrors the script's keys (minus `links`) in script order; each value is the first matching XPath's text (element matches yield their XPath string-value) or `null` when no XPath matched — `null`, never missing. Facebook agents instead carry the built-in/overridden field set (author, text, timestamp, reactions, comments, mediaUrls, permalink) |
+| `fields` | obj | mirrors the script's keys (minus `links`) in script order; each value is the first matching XPath's text (element matches yield their XPath string-value) or `null` when no XPath matched — `null`, never missing. Facebook agents instead carry the built-in/overridden field set (author, text, timestamp, reactions, comments, mediaUrls, permalink); ecommerce agents carry theirs (title, price, currency, availability, rating, category, imageUrl, description, productUrl — price/rating pre-transformed, imageUrl absolute) |
 | `crawledAt` | datetime | tz-aware UTC; the same `now` for all docs of one run |
 
 Links that fail to download (non-2xx, timeout, DNS) or that get classified as

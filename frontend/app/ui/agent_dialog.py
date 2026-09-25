@@ -32,6 +32,8 @@ _FORMAT_ITEMS = (("JSON", "json"), ("XML", "xml"), ("Markdown", "md"))
 _SOURCE_ITEMS = (
     ("Generic (XPath script)", "generic"),
     ("Facebook posts", "facebook"),
+    ("Source pages (listing to articles)", "source_pages"),
+    ("E-commerce products (listing to products)", "ecommerce"),
 )
 _MAX_NAME = 100
 _MAX_SCRIPT = 1_000_000
@@ -114,6 +116,25 @@ class AgentDialog(QDialog):
             "mediaUrls, permalink. Script keys (optional) override them with "
             "your own XPaths; links must be facebook.com https URLs."
         )
+        self._source_pages_hint = QLabel(objectName="formHint", wordWrap=True)
+        self._source_pages_hint.setText(
+            "Script keys: source_pages (listing-page URLs), post_link "
+            "(article-link XPaths), optional next_page OR load_more (button "
+            "XPath - not both), optional max_next (page/click cap). Every "
+            "other key is field name -> XPath(s) extracted from each article."
+        )
+        self._source_pages_hint.hide()  # source_pages mode shows it
+        self._ecommerce_hint = QLabel(objectName="formHint", wordWrap=True)
+        self._ecommerce_hint.setText(
+            "Script keys: links (category/listing URLs). Optional: "
+            "product_link and next_page (XPath overrides of the built-in "
+            "selectors), max_next (pagination cap), max_products "
+            "(unique-product cap). Every other key is field name -> XPath(s) "
+            "extracted from each product page (built-ins: title, price, "
+            "currency, availability, rating, category, imageUrl, description, "
+            "productUrl)."
+        )
+        self._ecommerce_hint.hide()  # ecommerce mode shows it
         self._saved_credentials_label = QLabel(objectName="formHint", wordWrap=True)
         self._saved_credentials_label.hide()
         self._clear_credentials_button = QPushButton("Clear saved credentials")
@@ -209,8 +230,11 @@ class AgentDialog(QDialog):
         ):
             layout.addWidget(QLabel(caption, objectName="fieldCaption"))
             layout.addWidget(edit)
-        # Facebook-only credentials widgets sit below Format as siblings
-        # toggled by visibility (same pattern as the json builder below).
+        # Source-specific hints sit below the combos as siblings toggled by
+        # visibility (same pattern as the json builder below).
+        layout.addWidget(self._source_pages_hint)
+        layout.addWidget(self._ecommerce_hint)
+        # Facebook-only credentials widgets.
         layout.addWidget(self._credentials_container())
         script_header = QHBoxLayout()
         script_header.addWidget(QLabel("Script", objectName="fieldCaption"))
@@ -424,6 +448,8 @@ class AgentDialog(QDialog):
     def _apply_source_mode(self, source: str, *, initial: bool = False) -> None:
         facebook = source == "facebook"
         self._credentials_container_widget.setVisible(facebook)
+        self._source_pages_hint.setVisible(source == "source_pages")
+        self._ecommerce_hint.setVisible(source == "ecommerce")
         if not initial:
             self._refit()
 
@@ -581,7 +607,7 @@ class AgentDialog(QDialog):
         return None
 
     @staticmethod
-    def _validate_script(script: str, fmt: str) -> str | None:
+    def _validate_script(script: str, fmt: str, source: str) -> str | None:
         if not script:
             return "Enter the agent script."
         if len(script) > _MAX_SCRIPT:
@@ -590,9 +616,157 @@ class AgentDialog(QDialog):
             # The editor is hand-editable; a broken edit must not reach the
             # backend (which would 400 on the same check).
             try:
-                json.loads(script)
+                data = json.loads(script)
             except ValueError as exc:
                 return f"Script is not valid JSON: {exc}"
+            if source == "source_pages":
+                return AgentDialog._validate_source_pages_script(data)
+            if source == "ecommerce":
+                return AgentDialog._validate_ecommerce_script(data)
+        return None
+
+    @staticmethod
+    def _validate_source_pages_script(data: object) -> str | None:
+        """Mirror the backend's source_pages structure checks (creation-time
+        subset) so a bad config never leaves the dialog — the agent save
+        would 400 on the same rules. Detail strings match the backend's
+        verbatim."""
+        if not isinstance(data, dict):
+            return (
+                "script must be a JSON object mapping field names to "
+                "XPath expressions"
+            )
+
+        def xpath_error(label: str, value) -> str | None:
+            if isinstance(value, str) and value.strip():
+                return None
+            if (
+                isinstance(value, list)
+                and value
+                and all(isinstance(v, str) and v.strip() for v in value)
+            ):
+                return None
+            return (
+                f"script {label} must be a non-empty XPath string or a "
+                "non-empty list of XPath strings"
+            )
+
+        source_pages = data.get("source_pages")
+        if (
+            not isinstance(source_pages, list)
+            or not source_pages
+            or not all(isinstance(u, str) and u.strip() for u in source_pages)
+        ):
+            return "script 'source_pages' must be a non-empty list of URL strings"
+        error = xpath_error("'post_link'", data.get("post_link"))
+        if error:
+            return error
+        has_next = "next_page" in data
+        has_more = "load_more" in data
+        if has_next and has_more:
+            return (
+                "script cannot contain both 'next_page' and 'load_more' "
+                "- choose one pagination mode"
+            )
+        if has_next:
+            error = xpath_error("'next_page'", data["next_page"])
+            if error:
+                return error
+        if has_more:
+            error = xpath_error("'load_more'", data["load_more"])
+            if error:
+                return error
+        has_max = "max_next" in data
+        has_alias = "max_next_page" in data
+        if has_max and has_alias:
+            return "script cannot contain both 'max_next' and 'max_next_page'"
+        if has_max or has_alias:
+            raw = data["max_next" if has_max else "max_next_page"]
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+                return "script 'max_next' must be an integer of at least 1"
+        reserved = {
+            "source_pages",
+            "post_link",
+            "next_page",
+            "load_more",
+            "max_next",
+            "max_next_page",
+        }
+        for key, value in data.items():
+            if key in reserved:
+                continue
+            error = xpath_error(f"field '{key}'", value)
+            if error:
+                return error
+        return None
+
+    @staticmethod
+    def _validate_ecommerce_script(data: object) -> str | None:
+        """Mirror the backend's ecommerce structure checks (creation-time
+        subset) so a bad config never leaves the dialog — the agent save
+        would 400 on the same rules. Detail strings match the backend's
+        verbatim."""
+        if not isinstance(data, dict):
+            return (
+                "script must be a JSON object mapping field names to "
+                "XPath expressions"
+            )
+
+        def xpath_error(label: str, value) -> str | None:
+            if isinstance(value, str) and value.strip():
+                return None
+            if (
+                isinstance(value, list)
+                and value
+                and all(isinstance(v, str) and v.strip() for v in value)
+            ):
+                return None
+            return (
+                f"script {label} must be a non-empty XPath string or a "
+                "non-empty list of XPath strings"
+            )
+
+        links = data.get("links")
+        if (
+            not isinstance(links, list)
+            or not links
+            or not all(isinstance(u, str) and u.strip() for u in links)
+        ):
+            return "script 'links' must be a non-empty list of URL strings"
+        if "product_link" in data:
+            error = xpath_error("'product_link'", data["product_link"])
+            if error:
+                return error
+        if "next_page" in data:
+            error = xpath_error("'next_page'", data["next_page"])
+            if error:
+                return error
+        has_max = "max_next" in data
+        has_alias = "max_next_page" in data
+        if has_max and has_alias:
+            return "script cannot contain both 'max_next' and 'max_next_page'"
+        if has_max or has_alias:
+            raw = data["max_next" if has_max else "max_next_page"]
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+                return "script 'max_next' must be an integer of at least 1"
+        if "max_products" in data:
+            raw = data["max_products"]
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+                return "script 'max_products' must be an integer of at least 1"
+        reserved = {
+            "links",
+            "product_link",
+            "next_page",
+            "max_next",
+            "max_next_page",
+            "max_products",
+        }
+        for key, value in data.items():
+            if key in reserved:
+                continue
+            error = xpath_error(f"field '{key}'", value)
+            if error:
+                return error
         return None
 
     # -- submission -----------------------------------------------------------
@@ -610,7 +784,7 @@ class AgentDialog(QDialog):
         # The editor is the source of truth in every format: json rows are a
         # builder whose output reaches the script only via Generate JSON.
         script = self._script_edit.toPlainText()
-        error = self._validate_script(script, fmt)
+        error = self._validate_script(script, fmt, source)
         if error:
             self._show_error(error)
             return

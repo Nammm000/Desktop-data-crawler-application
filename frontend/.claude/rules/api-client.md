@@ -22,8 +22,8 @@ globs: ["app/api/**"]
 | `delete_user()` | `DELETE /api/v1/users/{id}` | Bearer | — | `None` (204, empty body) | `400` self-delete, `404`, `403` |
 | `delete_users()` | `DELETE /api/v1/users` | Bearer | `{userIds}` (min 1) | `int` (deleted count) | `400` self-in-list, `422`, `403` |
 | `list_agents()` | `GET /api/v1/agents?limit&skip` | Bearer | — | `AgentPage(agents, total)` | `422` bad params |
-| `create_agent()` | `POST /api/v1/agents` | Bearer | `{name, format, script, sourceType?}` | `201 Agent` | `409` dup name, `400` invalid JSON script, `422` |
-| `update_agent()` | `PATCH /api/v1/agents/{id}` | Bearer | `{name?, format?, script?, sourceType?}` (partial) | `Agent` | `409` dup name, `400` JSON check on merged script, `404`, `422` |
+| `create_agent()` | `POST /api/v1/agents` | Bearer | `{name, format, script, sourceType?}` | `201 Agent` | `409` dup name, `400` invalid JSON script (or invalid source_pages structure — both pagination buttons, missing `source_pages`/`post_link`, bad `max_next`; or invalid ecommerce structure — bad `links`, both `max_next` spellings, bad `max_next`/`max_products`, non-XPath field), `422` |
+| `update_agent()` | `PATCH /api/v1/agents/{id}` | Bearer | `{name?, format?, script?, sourceType?}` (partial) | `Agent` | `409` dup name, `400` JSON check / source_pages / ecommerce structure check on merged view, `404`, `422` |
 | `delete_agent()` | `DELETE /api/v1/agents/{id}` | Bearer | — | `None` (204, empty body) | `404` |
 | `run_agent()` | `GET /api/v1/agents/{id}/run` | Bearer | — | `202 Agent` (status `Running`) | `404`, `409` already running, `400` script not runnable (incl. non-facebook links on a facebook agent), `503` credentials undecryptable |
 | `stop_agent()` | `POST /api/v1/agents/{id}/stop` | Bearer | — | `202 Agent` (still `Running`; the Stopped outcome arrives via WS) | `404`, `409` not running |
@@ -60,7 +60,20 @@ globs: ["app/api/**"]
   the updated `Agent` already flipped to `Running`; the crawl finishes in the
   background. Errors surface the backend detail verbatim (409 "Agent is
   already running"; 400 when the script is not a JSON object with a non-empty
-  `links` list of URL strings). The camelCase `DataOut` (`agentId`,
+  `links` list of URL strings — for `source_pages` agents, when the script
+  violates the source_pages structure rules or lists non-http(s) source
+  pages; for `ecommerce` agents, non-http(s) seeds, seeds over
+  `CRAWL_MAX_PAGES`, a `max_products` over `ECOMMERCE_MAX_PRODUCTS`, or a
+  structure violation). `sourceType` values: `"generic"` | `"facebook"` |
+  `"source_pages"` | `"ecommerce"`
+  (source_pages runs first DISCOVER article links from the script's
+  `source_pages` listing pages in headless Chromium — clicking a `next_page`
+  or `load_more` button, randomized 3–120 s listing delays — then crawl the
+  unique links; the row stays `Running` for minutes by design, and stop works
+  during discovery too. ecommerce runs crawl a product catalog in two phases
+  — discover product links on the `links` listing pages, follow `next_page`
+  automatically, extract built-in product fields per product — see
+  `ECOMMERCE_CRAWLER_STRATEGY.md`). The camelCase `DataOut` (`agentId`,
   `agentName`, `url`, `fields` mapping XPath name → value/`null`,
   `crawledAt`) parses into `AgentData` / `AgentDataPage`; the data list sorts
   newest-first server-side. `list_orphaned_data` hits

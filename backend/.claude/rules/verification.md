@@ -30,3 +30,31 @@ Spot-check edge cases: duplicate signup `409`, short/multibyte-overflow password
 
 Clean up test users afterwards:
 `db.users.deleteOne({username:"smoketest"})` (refresh tokens TTL out on their own).
+
+## Source-pages agents (sourceType "source_pages")
+
+```bash
+# Run uvicorn with fast delays for manual testing:
+SOURCE_PAGES_DELAY_MIN_SECONDS=0.5 SOURCE_PAGES_DELAY_MAX_SECONDS=2 \
+  .venv/bin/uvicorn app.main:app --port 8000
+# (requires the one-time: .venv/bin/playwright install chromium)
+
+# 400 on create: both pagination buttons
+curl -s -X POST $BASE/agents -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{
+    "name":"sp-bad","format":"json","sourceType":"source_pages",
+    "script":"{\"source_pages\":[\"https://example.com\"],\"post_link\":\"//a/@href\",
+               \"next_page\":\"//a\",\"load_more\":\"//b\"}"}'
+# -> 400 "script cannot contain both 'next_page' and 'load_more' - choose one pagination mode"
+
+# 201 happy path, then run: 202 -> Completed with discovered articles
+curl -s -X POST $BASE/agents -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{
+    "name":"sp-ok","format":"json","sourceType":"source_pages",
+    "script":"{\"source_pages\":[\"https://e.vnexpress.net/news/tech/tech-news\"],
+               \"post_link\":\"//h2/a/@href\",\"max_next\":1,
+               \"title\":[\"//meta[@property=\'og:title\']/@content\",\"//title\"]}"}'
+curl -s $BASE/agents/<agentId>/run -H "Authorization: Bearer $TOKEN"     # 202
+# PATCHing a generic agent to sourceType source_pages keeping a links-style
+# script also 400s (merged-view structure check)
+```

@@ -497,11 +497,14 @@ class AgentManagementPage(QWidget):
             name_font.setUnderline(True)
             name_item.setFont(name_font)
             name_item.setForeground(QColor("#4F46E5"))
-            source_hint = (
-                "Facebook post agent"
-                if agent.source_type == "facebook"
-                else "Generic XPath agent"
-            )
+            if agent.source_type == "facebook":
+                source_hint = "Facebook post agent"
+            elif agent.source_type == "source_pages":
+                source_hint = "Source-pages agent (listing discovery + article crawl)"
+            elif agent.source_type == "ecommerce":
+                source_hint = "E-commerce product agent (listing + product pages)"
+            else:
+                source_hint = "Generic XPath agent"
             name_item.setToolTip(f"{source_hint} — click to view its data")
             self._table.setItem(row, _COL_NAME, name_item)
             self._table.setItem(

@@ -8,7 +8,13 @@ AsyncCrawlerRunner in pure-asyncio mode (TWISTED_REACTOR_ENABLED=False — the
 default Twisted reactor would collide with uvicorn's loop), inserts one
 `data` doc per crawled page (nulling their agentId when the agent was
 deleted mid-run), then flips the agent to "Completed"/"Failed"
-and broadcasts the outcome with the crawled data."""
+and broadcasts the outcome with the crawled data.
+
+source_pages agents run in two phases inside `execute_crawl`: a Playwright
+listing-page discovery first (source_pages_discovery.discover_links —
+collects article links, clicks next_page/load_more buttons, randomized
+delays, stop-aware), then the discovered links go through the regular
+AgentScriptSpider crawl as if the script had listed them explicitly."""
 
 import asyncio
 import dataclasses
@@ -42,6 +48,18 @@ from app.services.facebook_spider import (
     FacebookPostSpider,
     facebook_settings,
     is_facebook_url,
+)
+from app.services.source_pages_discovery import (
+    SourcePagesPlan,
+    discover_links,
+    parse_source_pages_script,
+    source_pages_settings,
+)
+from app.services.ecommerce_spider import (
+    EcommercePlan,
+    EcommerceProductSpider,
+    ecommerce_settings,
+    parse_ecommerce_script,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,14 +212,10 @@ def _classify_download_error(
     return FailureReason.REQUEST_ERROR, f"{name}: {exc}" if str(exc) else name
 
 
-def _parse_run_script(
-    doc: dict, settings: Settings
-) -> tuple[list[str], dict[str, list[str]]]:
-    """Run-time script validation (stricter than agent_service's write-time
-    JSON-parseability check). Returns (links, {field: [xpath, ...]}).
-    Facebook agents get stricter link rules (https + facebook.com) — their
-    field XPaths are OVERRIDES on the spider's built-ins, not the whole set."""
-    source = doc.get("sourceType", AgentSource.GENERIC)
+def _load_json_script(doc: dict) -> dict:
+    """Shared run-time prologue: the effective format must be json and the
+    script must parse into a dict (source_pages scripts stop here and
+    continue in parse_source_pages_script)."""
     if doc["format"] != AgentFormat.JSON:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -220,6 +234,18 @@ def _parse_run_script(
             detail="script must be a JSON object mapping field names to "
             "XPath expressions",
         )
+    return parsed
+
+
+def _parse_run_script(
+    doc: dict, settings: Settings
+) -> tuple[list[str], dict[str, list[str]]]:
+    """Run-time script validation (stricter than agent_service's write-time
+    JSON-parseability check). Returns (links, {field: [xpath, ...]}).
+    Facebook agents get stricter link rules (https + facebook.com) — their
+    field XPaths are OVERRIDES on the spider's built-ins, not the whole set."""
+    source = doc.get("sourceType", AgentSource.GENERIC)
+    parsed = _load_json_script(doc)
 
     links = parsed.get("links")
     if (
@@ -274,6 +300,65 @@ def _parse_run_script(
                 "string or a non-empty list of XPath strings",
             )
     return [u.strip() for u in links], field_xpaths
+
+
+def _parse_source_pages_run_script(
+    doc: dict, settings: Settings
+) -> SourcePagesPlan:
+    """source_pages twin of _parse_run_script: structure via
+    parse_source_pages_script, then the same URL allowlist / page-cap checks
+    applied to the source pages (article links are discovered at runtime and
+    are capped there instead)."""
+    plan = parse_source_pages_script(_load_json_script(doc))
+    for u in plan.source_pages:
+        url = urlparse(u)
+        if url.scheme not in ("http", "https") or not url.hostname:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"source page '{u}' is not a supported http/https URL",
+            )
+    if len(plan.source_pages) > settings.crawl_max_pages:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"script has more than {settings.crawl_max_pages} source "
+            "pages (CRAWL_MAX_PAGES)",
+        )
+    return plan
+
+
+def _parse_ecommerce_run_script(doc: dict, settings: Settings) -> EcommercePlan:
+    """ecommerce twin of _parse_run_script: structure via
+    parse_ecommerce_script, then the URL allowlist / page-cap checks on the
+    seed listing pages, the ECOMMERCE_MAX_PRODUCTS ceiling on the script's
+    own cap, and the default cap fill (product links are discovered at
+    runtime and are capped by the spider instead)."""
+    plan = parse_ecommerce_script(_load_json_script(doc))
+    for u in plan.seeds:
+        url = urlparse(u)
+        if url.scheme not in ("http", "https") or not url.hostname:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"link '{u}' is not a supported http/https URL",
+            )
+    if len(plan.seeds) > settings.crawl_max_pages:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"script has more than {settings.crawl_max_pages} links "
+            "(CRAWL_MAX_PAGES)",
+        )
+    if plan.max_products is not None and plan.max_products > settings.ecommerce_max_products:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"script 'max_products' cannot exceed "
+            f"{settings.ecommerce_max_products} (ECOMMERCE_MAX_PRODUCTS)",
+        )
+    # None (no script cap) -> the settings ceiling; a lower script cap wins.
+    max_products = (
+        plan.max_products
+        if plan.max_products is not None
+        else settings.ecommerce_max_products
+    )
+    return dataclasses.replace(plan, max_products=max_products)
 
 
 def _scrapy_settings(settings: Settings) -> dict:
@@ -360,7 +445,24 @@ async def start_agent_crawl(
             status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
         )
     source = doc.get("sourceType", AgentSource.GENERIC)
-    links, field_xpaths = _parse_run_script(doc, settings)
+    plan: SourcePagesPlan | None = None
+    ecommerce_plan: EcommercePlan | None = None
+    links: list[str] = []
+    field_xpaths: dict[str, list[str]] = {}
+    if source == AgentSource.SOURCE_PAGES:
+        # Article links are discovered at runtime; the plan carries the
+        # source pages, pagination mode and field XPaths instead.
+        plan = _parse_source_pages_run_script(doc, settings)
+        field_xpaths = plan.field_xpaths
+    elif source == AgentSource.ECOMMERCE:
+        # Product links are discovered at runtime; the plan carries the seed
+        # listing pages, pagination/caps and field overrides instead. The
+        # seeds ARE the spider's start_urls.
+        ecommerce_plan = _parse_ecommerce_run_script(doc, settings)
+        links = ecommerce_plan.seeds
+        field_xpaths = ecommerce_plan.field_xpaths
+    else:
+        links, field_xpaths = _parse_run_script(doc, settings)
 
     cookies: dict[str, str] | None = None
     proxies: list[str] | None = None
@@ -416,6 +518,8 @@ async def start_agent_crawl(
             source=source,
             cookies=cookies,
             proxies=proxies,
+            source_pages_plan=plan,
+            ecommerce_plan=ecommerce_plan,
         )
     )
     _running_crawls[agent_id] = _RunningCrawl(task=crawl_task)
@@ -426,8 +530,10 @@ async def stop_agent_crawl(
     db: AsyncIOMotorDatabase, agent_id: str, acting_email: str
 ) -> dict:
     """Ask an in-flight run to wind down gracefully: partial results are
-    persisted and the agent lands in Stopped. Raises 404 (unknown id) / 409
-    (not running)."""
+    persisted and the agent lands in Stopped. During a source_pages run's
+    discovery phase the runner does not exist yet — stop_requested alone ends
+    it (discovery checks it between navigations). Raises 404 (unknown id) /
+    409 (not running)."""
     entry = _running_crawls.get(agent_id)
     if entry is None or entry.task.done():
         raise HTTPException(
@@ -481,20 +587,28 @@ async def execute_crawl(
     *,
     agent_snapshot: dict,
     acting_email: str,
-    links: list[str],
-    field_xpaths: dict[str, list[str]],
+    links: list[str] | None = None,
+    field_xpaths: dict[str, list[str]] | None = None,
     source: str = AgentSource.GENERIC,
     cookies: dict[str, str] | None = None,
     proxies: list[str] | None = None,
+    source_pages_plan: SourcePagesPlan | None = None,
+    ecommerce_plan: EcommercePlan | None = None,
 ) -> None:
     """Background body: crawl -> persist -> status flip -> broadcast. Never
-    raises (the Failed path swallows and logs); always deregisters itself."""
+    raises (the Failed path swallows and logs); always deregisters itself.
+    source_pages agents: Playwright discovery first (links start unknown),
+    then the discovered links go through the regular spider crawl.
+    ecommerce agents: the EcommerceProductSpider discovers the product links
+    from the seed listing pages itself (links = the seeds)."""
     agent_id = agent_snapshot["id"]
     frame_agent = {"_id": agent_id, "name": agent_snapshot["name"]}
     started_wall = datetime.now(timezone.utc)
     started = time.monotonic()  # monotonic: runtime survives clock adjustments
+    links = links if links is not None else []  # source_pages fills this in
     results: list[dict] = []  # the spider appends via this shared ref
     failures: list[dict] = []  # errback + parse classify into this one
+    spider_stats: dict[str, int] = {}  # ecommerce discovered/attempted counts
     settings = get_settings()
     crawl_settings = _scrapy_settings(settings)
     spider_class: type = AgentScriptSpider
@@ -509,33 +623,108 @@ async def execute_crawl(
             "proxies": proxies,
             "fb_host": settings.facebook_host,
         }
-    try:
-        # Constructed per run inside the running loop, never shared.
-        runner = AsyncCrawlerRunner(settings=crawl_settings)
-        entry = _running_crawls.get(agent_id)
-        if entry is not None:
-            entry.runner = runner  # lets stop_agent_crawl reach the crawler
-        await runner.crawl(
-            spider_class,
-            links=links,
-            field_xpaths=field_xpaths,
-            results=results,
-            failures=failures,
-            **spider_kwargs,
+    elif source == AgentSource.ECOMMERCE:
+        spider_class = EcommerceProductSpider
+        crawl_settings = ecommerce_settings(
+            crawl_settings,
+            download_delay=settings.ecommerce_download_delay,
+            concurrent_requests=settings.ecommerce_concurrent_requests,
         )
+        spider_kwargs = {
+            "product_link_xpaths": ecommerce_plan.product_link_xpaths,
+            "next_page_xpaths": ecommerce_plan.next_page_xpaths,
+            "max_next": ecommerce_plan.max_next,
+            "max_products": ecommerce_plan.max_products,
+            "stats": spider_stats,
+        }
+    try:
+        entry = _running_crawls.get(agent_id)
+        skip_crawl = False
+        if source_pages_plan is not None:
+            # Phase 1 — listing-page discovery (minutes: randomized delays).
+            # should_stop reads the registry entry start_agent_crawl created,
+            # so a stop request lands here even before any runner exists.
+            deadline = started + settings.source_pages_timeout_seconds
+            discovery = await discover_links(
+                source_pages_plan,
+                settings=settings,
+                should_stop=lambda: bool(entry and entry.stop_requested),
+                deadline=deadline,
+            )
+            links = discovery.links
+            field_xpaths = source_pages_plan.field_xpaths
+            failures.extend(discovery.failures)
+            crawl_settings = source_pages_settings(
+                crawl_settings,
+                download_delay=settings.source_pages_article_download_delay,
+                # Discovery already spent part of the overall budget — the
+                # crawl phase gets whatever remains (floor keeps the setting
+                # valid when discovery overran the deadline).
+                timeout_seconds=max(30.0, deadline - time.monotonic()),
+            )
+            if discovery.stopped or not links:
+                # Stopped mid-discovery, or every source page failed — either
+                # way there is nothing to crawl; the terminal flip below and
+                # the unattempted-links accounting handle both.
+                skip_crawl = True
+        if not skip_crawl:
+            # Constructed per run inside the running loop, never shared.
+            runner = AsyncCrawlerRunner(settings=crawl_settings)
+            if entry is not None:
+                entry.runner = runner  # lets stop_agent_crawl reach the crawler
+            await runner.crawl(
+                spider_class,
+                links=links or [],
+                field_xpaths=field_xpaths or {},
+                results=results,
+                failures=failures,
+                **spider_kwargs,
+            )
         stopped = entry is not None and entry.stop_requested
-        if stopped:
-            # Links that were never attempted because the stop came early.
-            unattempted = len(links) - len(results) - len(failures)
-            if unattempted > 0:
+        if source == AgentSource.ECOMMERCE:
+            # `links` are just the seeds — the run's real scope is the
+            # discovered products (spider_stats is shared with the spider,
+            # so the counts survive even an aborted crawl).
+            discovered = spider_stats.get("discovered_products", 0)
+            attempted = spider_stats.get("attempted_products", 0)
+            total_links = discovered or len(links)
+            unattempted = max(0, discovered - attempted)
+            if unattempted > 0 and stopped:
                 failures.append(
                     {
                         "url": None,
                         "reason": FailureReason.CANCELLED,
-                        "detail": f"{unattempted} of {len(links)} links were "
-                        "not fetched before the stop",
+                        "detail": f"{unattempted} of {discovered} discovered "
+                        "products were not fetched before the stop",
                     }
                 )
+            elif unattempted > 0:
+                # CLOSESPIDER (page/time budget) closed the crawl silently —
+                # make the truncation visible in the run summary.
+                failures.append(
+                    {
+                        "url": None,
+                        "reason": FailureReason.CANCELLED,
+                        "detail": "stopped after the crawl budget "
+                        "(CRAWL_MAX_PAGES / CRAWL_TIMEOUT_SECONDS) was "
+                        f"exhausted; {unattempted} discovered products "
+                        "were not fetched",
+                    }
+                )
+        else:
+            total_links = len(links)
+            if stopped:
+                # Links that were never attempted because the stop came early.
+                unattempted = len(links) - len(results) - len(failures)
+                if unattempted > 0:
+                    failures.append(
+                        {
+                            "url": None,
+                            "reason": FailureReason.CANCELLED,
+                            "detail": f"{unattempted} of {len(links)} links "
+                            "were not fetched before the stop",
+                        }
+                    )
         docs = data_service.build_data_docs(agent_snapshot, results)
         if docs:  # pymongo rejects insert_many([]) — 0-item runs skip persistence
             await data_service.insert_many(db, docs)
@@ -543,7 +732,7 @@ async def execute_crawl(
         last_run = _build_last_run(
             started_at=started_wall,
             outcome=outcome,
-            total_links=len(links),
+            total_links=total_links,
             results=results,
             failures=failures,
         )
@@ -585,7 +774,12 @@ async def execute_crawl(
             failed_run = _build_last_run(
                 started_at=started_wall,
                 outcome=LastRunOutcome.FAILED,
-                total_links=len(links),
+                # ecommerce: products discovered before the crash, if any
+                total_links=(
+                    spider_stats.get("discovered_products", 0) or len(links)
+                    if source == AgentSource.ECOMMERCE
+                    else len(links)
+                ),
                 results=results,
                 failures=failures,
             )

@@ -93,6 +93,12 @@ app/
 │                             # delete cascades via data_service.detach_from_agent
 ├── services/crawler_service.py    # AgentScriptSpider, start_agent_crawl/execute_crawl,
 │                             # run-script validation, startup Running sweep
+├── services/source_pages_discovery.py # source_pages agents: script parsing +
+│                             # Playwright listing-page link discovery (next_page /
+│                             # load_more button clicking, randomized delays)
+├── services/ecommerce_spider.py  # ecommerce agents: two-phase product spider
+│                             # (listing -> product pages, pagination following),
+│                             # EcommercePlan parser, price/rating transforms
 ├── services/data_service.py  # build_data_docs + insert_many (crawl results), list_by_agent,
 │                             # list_orphaned (deleted-agent data), delete_one / delete_many,
 │                             # detach_from_agent (agent-delete cascade) + detach_dangling_agents (startup sweep)
@@ -282,6 +288,32 @@ kills the crawl — the lifespan startup sweep flips orphaned `Running` agents t
 finishing crawl nulls its just-inserted docs' `agentId` (they land as orphans)
 and the status flip no-ops; the `detach_dangling_agents` startup sweep is the
 backstop for the crash window.
+
+source_pages runs insert a discovery phase before the crawl: `execute_crawl`
+first awaits `source_pages_discovery.discover_links` (plain-asyncio Playwright
+headless chromium — NOT scrapy-playwright, whose Twisted handlers never engage
+in pure-asyncio mode), which walks the source pages, clicks next_page /
+load_more buttons with randomized 3–120 s delays on listing navigations,
+dedupes article links, and honors both the stop flag (checked between
+navigations and every second of each delay) and the overall
+`SOURCE_PAGES_TIMEOUT_SECONDS` deadline. The discovered links then flow
+through the regular `AgentScriptSpider` crawl with the remaining budget as
+`CLOSESPIDER_TIMEOUT`; `lastRun.totalLinks` counts discovered unique links,
+and discovery-phase failures share the same `failures` list/reasons.
+
+ecommerce runs swap the spider class instead: `execute_crawl` runs
+`EcommerceProductSpider` (`app/services/ecommerce_spider.py`) with the plan
+from `_parse_ecommerce_run_script` (seeds = the script's `links`, pagination
+and product caps, per-field overrides) and a politeness settings overlay.
+The spider discovers product links itself (`parse` on listing pages —
+normalize/dedupe/seed-host-allowlist, then follow `next_page`; a missing
+next link is the normal end) and extracts the built-in product fields on
+each detail page (`parse_product`; price/rating transforms, absolute
+imageUrl, `productUrl` = final URL). Reaching `max_products` stops discovery
+and DRAINS the queued requests (exact cap; one `cancelled` entry), a
+stop/budget truncation records `discovered - attempted` unfetched products,
+and `lastRun.totalLinks` counts discovered unique products via the shared
+`stats` dict. Full walkthrough: `ECOMMERCE_CRAWLER_STRATEGY.md`.
 
 ## Dependency injection (`app/api/deps.py`, `app/core/config.py`)
 

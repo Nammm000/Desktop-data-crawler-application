@@ -2,12 +2,14 @@
 
 A desktop data-crawler: a FastAPI + MongoDB backend that runs crawl **agents**
 (embedded [Scrapy](https://scrapy.org) — generic XPath spiders and Facebook
-post collection), and a PySide6 desktop client.
+post collection — plus [Playwright](https://playwright.dev)-driven
+source-pages discovery), and a PySide6 desktop client.
 
 ## Quick start
 
 ```bash
 make setup   # both virtualenvs + pinned deps + backend/.env with fresh secrets
+             # (+ one-time chromium download for source-pages agents)
 make up      # MongoDB (docker) -> API on :8000 -> desktop app
 ```
 
@@ -22,7 +24,19 @@ targets (dev mode, logs, secret generation).
   `{"links": [url, ...], "<field>": "<xpath or [xpath, ...]>"}`. A *Facebook*
   agent points at facebook.com post URLs (auto-rewritten to `mbasic.facebook.com`)
   and extracts built-in post fields (author, text, timestamp, reactions,
-  comments, permalink, media) with optional XPath overrides.
+  comments, permalink, media) with optional XPath overrides. A *source-pages*
+  agent starts from listing pages instead of explicit links: it discovers
+  article URLs via `post_link` XPaths, walks pagination by clicking a
+  `next_page` or `load_more` button (optional `max_next` cap) in headless
+  Chromium with randomized 3–120 s delays, then crawls the unique articles
+  with the script's remaining field XPaths (see `backend/README.md`). An
+  *e-commerce* agent crawls a product catalog autonomously: give it
+  category/listing pages and it discovers the product links, follows the
+  listing "next" link on its own, and extracts built-in product fields
+  (title, price, currency, availability, rating, ...) from each detail page,
+  with caps (`max_next`, `max_products`) and polite pacing — built-in
+  selectors target books.toscrape.com and are overridable per field (see
+  `ECOMMERCE_CRAWLER_STRATEGY.md`).
 - **Credentials** (Facebook cookies, proxy list) are stored Fernet-encrypted
   in a separate collection and are **never returned by the API**.
 - **Run results**: one `data` document per successfully crawled page; the
