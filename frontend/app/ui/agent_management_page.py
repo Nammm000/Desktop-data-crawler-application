@@ -194,6 +194,11 @@ class AgentManagementPage(QWidget):
         self._data_rows: list[AgentData] = []
         # User collapsed the data body; a name click always re-expands.
         self._data_collapsed = False
+        # Live SSE run: _live_agent is the agent whose run is streaming into
+        # the data table; rows append while _live_active (a live stream owns
+        # the table — _reload_data no-ops until the run finishes).
+        self._live_agent: Agent | None = None
+        self._live_active = False
 
         self._data_toggle_button = QPushButton("Hide", objectName="pageButton")
         self._data_toggle_button.setToolTip("Hide or show the data table")
@@ -587,28 +592,87 @@ class AgentManagementPage(QWidget):
         if self._busy():
             return
         self._pending_run = True
-        self._set_loading(True)  # blocks reload/pagination/table for free
-        self._session.run_agent(
+        self._set_loading(True)  # blocks reload/pagination/table until the
+        # stream handshake settles (start event or error)
+        if not self._live_active and not self._data_busy():
+            # Live mode: the data pane appears now and each crawled record
+            # appends as the backend saves it. A second concurrent run (or a
+            # data fetch in flight) never hijacks an active table — its
+            # outcome lands via the done event's resync instead.
+            self._selected_agent = agent
+            self._live_agent = agent
+            self._live_active = True
+            self._data_page_index = 0
+            self._data_total = 0
+            self._data_collapsed = False
+            self._apply_data_collapse()
+            self._data_subtitle.setText(f"{agent.name} — running…")
+            self._data_failures_button.hide()
+            self._data_error_banner.hide()
+            self._data_body.show()
+            self._populate_data(())
+            self._data_count_label.setText(" 0 rows")
+        self._session.run_agent_stream(
             agent.id,
-            on_success=lambda _updated: self._on_run_success(),
-            on_error=lambda exc: self._on_run_failed(exc),
+            on_event=lambda event, a=agent: self._on_run_stream_event(event, a),
+            on_error=lambda exc, a=agent: self._on_run_failed(a, exc),
         )
 
-    def _on_run_success(self) -> None:
-        self._pending_run = False
-        self._set_loading(False)  # reload() no-ops while loading
-        if self._session.user is None:
-            return  # Forced logout mid-call; clear() already reset the page.
-        self._error_banner.hide()
-        self.reload()  # the row flips to Running; the crawl finishes in the
-        # background and its records appear on the next data refresh.
+    def _on_run_stream_event(self, event, agent: Agent) -> None:
+        """SSE run events (GUI thread): `start` confirms the run, `document`
+        appends one saved record to the live table's last row, `done` exits
+        live mode and resyncs both sections from the server. Only the LIVE
+        agent's events touch the live table — another agent finishing first
+        must not cut a live stream short."""
+        is_live = self._live_active and self._live_agent is not None and (
+            agent.id == self._live_agent.id
+        )
+        if event.kind == "start":
+            self._pending_run = False
+            self._set_loading(False)  # reload() no-ops while loading
+            if self._session.user is None:
+                return  # Forced logout mid-call; clear() already reset the page.
+            self._error_banner.hide()
+            self.reload()  # the row flips to Running; _reload_data no-ops
+            # while live, so the streamed rows stay
+        elif event.kind == "document":
+            if (
+                not is_live
+                or self._session.user is None
+                or event.document is None
+                or self._selected_agent is None
+                or self._selected_agent.id != self._live_agent.id
+            ):
+                return  # not the live run, signed out, or selection moved on
+            self._append_data_row(event.document)
+        elif event.kind == "done":
+            self._pending_run = False
+            self._set_loading(False)
+            if is_live:
+                self._live_active = False
+            if self._session.user is None:
+                return
+            # Canonical refresh: the agents table picks up the terminal
+            # status + lastRun, the data pane the persisted listing.
+            self.reload()
 
-    def _on_run_failed(self, exc: Exception) -> None:
+    def _on_run_failed(self, agent: Agent, exc: Exception) -> None:
         self._pending_run = False
         self._set_loading(False)
         if self._session.user is None:
             return
-        # 409 already running / 400 script not runnable / 404 gone — verbatim.
+        if (
+            self._live_active
+            and self._live_agent is not None
+            and agent.id == self._live_agent.id
+        ):
+            self._live_active = False
+            if not self._data_rows:
+                self._clear_data_section()  # nothing streamed — drop the
+                # empty live pane the failed start opened
+        # 409 already running / 400 script not runnable / 404 gone / stream
+        # dropped mid-run — verbatim (a dropped stream keeps its rows; the
+        # crawl continues server-side and the WS push still delivers the end).
         self._error_banner.setText(str(exc))
         self._error_banner.show()
         self._preserve_banner = True
@@ -698,6 +762,9 @@ class AgentManagementPage(QWidget):
     def _select_agent(self, agent: Agent) -> None:
         if self._data_busy():
             return  # a data fetch/delete is in flight; nothing to cancel it
+        # An explicit selection takes the pane over from a live stream (the
+        # stream keeps running; its terminal event still triggers the resync).
+        self._live_active = False
         # Re-clicking the same name refetches page 1 — the manual data refresh.
         self._selected_agent = agent
         self._data_page_index = 0
@@ -735,9 +802,11 @@ class AgentManagementPage(QWidget):
 
     def _reload_data(self) -> None:
         """Fetch the selected agent's current data page; a no-op while a
-        fetch is already running or when nothing is selected."""
+        fetch is already running, while a live stream owns the table, or
+        when nothing is selected."""
         if (
             self._data_loading
+            or self._live_active
             or self._selected_agent is None
             or self._session.user is None
         ):
@@ -798,6 +867,8 @@ class AgentManagementPage(QWidget):
     def _sync_data_subtitle(self) -> None:
         """Empty-state caption / blank — plus the last-run failure summary
         when the selected agent's most recent run had failed links."""
+        if self._live_active:
+            return  # the live stream owns the subtitle until the run ends
         if self._selected_agent is None:
             self._data_subtitle.setText(_DATA_EMPTY_CAPTION)
             self._data_failures_button.hide()
@@ -866,33 +937,49 @@ class AgentManagementPage(QWidget):
             # Same stale-widget rule as the agents table.
             for col in (_DCOL_CHECK, _DCOL_DELETE):
                 self._data_table.removeCellWidget(row, col)
-            url_item = QTableWidgetItem(item.url)
-            url_item.setToolTip(item.url)
-            self._data_table.setItem(row, _DCOL_URL, url_item)
-            compact = (
-                json.dumps(item.fields, ensure_ascii=False) if item.fields else ""
-            )
-            if item.fields:
-                # Same link affordance as the agents-table Name cell — the
-                # stylesheet cannot reach items, so indigo + underline lives
-                # here. Clicking opens the read-only fields viewer.
-                fields_item = QTableWidgetItem(compact)
-                fields_font = self._data_table.font()
-                fields_font.setUnderline(True)
-                fields_item.setFont(fields_font)
-                fields_item.setForeground(QColor("#4F46E5"))
-                fields_item.setToolTip("View the fields extracted from this page")
-            else:
-                fields_item = QTableWidgetItem("—")
-            self._data_table.setItem(row, _DCOL_FIELDS, fields_item)
-            self._data_table.setItem(
-                row, _DCOL_CRAWLED, QTableWidgetItem(format_date(item.crawled_at))
-            )
-            self._data_table.setCellWidget(row, _DCOL_CHECK, self._data_check_cell())
-            self._data_table.setCellWidget(
-                row, _DCOL_DELETE, self._data_delete_button(item)
-            )
+            self._populate_data_row(row, item)
         self._data_table.resizeRowsToContents()
+        self._sync_data_bulk_state()
+
+    def _populate_data_row(self, row: int, item: AgentData) -> None:
+        """Render one AgentData into an existing (already cleared) row."""
+        url_item = QTableWidgetItem(item.url)
+        url_item.setToolTip(item.url)
+        self._data_table.setItem(row, _DCOL_URL, url_item)
+        compact = (
+            json.dumps(item.fields, ensure_ascii=False) if item.fields else ""
+        )
+        if item.fields:
+            # Same link affordance as the agents-table Name cell — the
+            # stylesheet cannot reach items, so indigo + underline lives
+            # here. Clicking opens the read-only fields viewer.
+            fields_item = QTableWidgetItem(compact)
+            fields_font = self._data_table.font()
+            fields_font.setUnderline(True)
+            fields_item.setFont(fields_font)
+            fields_item.setForeground(QColor("#4F46E5"))
+            fields_item.setToolTip("View the fields extracted from this page")
+        else:
+            fields_item = QTableWidgetItem("—")
+        self._data_table.setItem(row, _DCOL_FIELDS, fields_item)
+        self._data_table.setItem(
+            row, _DCOL_CRAWLED, QTableWidgetItem(format_date(item.crawled_at))
+        )
+        self._data_table.setCellWidget(row, _DCOL_CHECK, self._data_check_cell())
+        self._data_table.setCellWidget(
+            row, _DCOL_DELETE, self._data_delete_button(item)
+        )
+
+    def _append_data_row(self, item: AgentData) -> None:
+        """Append one streamed record as the LAST row of the live table."""
+        row = self._data_table.rowCount()
+        self._data_table.insertRow(row)
+        self._populate_data_row(row, item)
+        self._data_table.resizeRowToContents(row)
+        self._data_table.scrollToBottom()
+        self._data_rows.append(item)
+        self._data_total += 1
+        self._data_count_label.setText(f" {self._data_total} rows")
         self._sync_data_bulk_state()
 
     def _data_check_cell(self) -> QWidget:
@@ -1023,6 +1110,8 @@ class AgentManagementPage(QWidget):
     def _clear_data_section(self) -> None:
         """Reset the data section to its pre-selection empty state."""
         self._selected_agent = None
+        self._live_agent = None
+        self._live_active = False
         self._data_page_index = 0
         self._data_total = 0
         self._pending_data_delete = False

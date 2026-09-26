@@ -28,7 +28,7 @@ paths:
 | `refresh_tokens` | `REFRESH_TOKENS_COLLECTION` | `token_service` (issue / rotate / revoke / delete_for_users) |
 | `agents` | `AGENTS_COLLECTION` (`app/models/agent.py`) | `agent_service` (create / get / list / update / delete), `crawler_service` (status flips + `lastRun` on run) |
 | `agent_secrets` | `AGENT_SECRETS_COLLECTION` (`app/models/agent.py`) | `agent_secret_service.set_credentials` / `clear_credentials` / `delete_for_agent` (cascade on agent delete); read by `get_metadata` (names/counts) and `decrypt_for_run` (crawl-time, decrypt in memory only) |
-| `data` | `DATA_COLLECTION` (`app/models/data.py`) | `data_service.insert_many`, called by `crawler_service` (one doc per crawled page); `data_service.detach_from_agent` (agentId → null on agent deletion + mid-crawl deletion) and `detach_dangling_agents` (startup sweep); read by `data_service.list_by_agent` (`GET /agents/{agentId}/data`) and `data_service.list_orphaned` (`GET /data/orphaned`); deleted by `data_service.delete_one` / `delete_many` (`DELETE /data/{dataId}`, `DELETE /data`) |
+| `data` | `DATA_COLLECTION` (`app/models/data.py`) | `data_service.insert_one`, called by the `crawler_service` run saver (one doc per crawled page, saved as the crawl produces it); `data_service.detach_from_agent` (agentId → null on agent deletion + mid-crawl deletion) and `detach_dangling_agents` (startup sweep); read by `data_service.list_by_agent` (`GET /agents/{agentId}/data`) and `data_service.list_orphaned` (`GET /data/orphaned`); deleted by `data_service.delete_one` / `delete_many` (`DELETE /data/{dataId}`, `DELETE /data`) |
 
 ```mermaid
 erDiagram
@@ -145,10 +145,11 @@ re-enter-the-credentials message.
 ## `data` document shape
 
 One document per successfully crawled page, written by agent runs
-(`data_service.build_data_docs` + `insert_many`, called from
-`crawler_service.execute_crawl`) and read by the per-agent listing
-(`data_service.list_by_agent`) and the orphaned-data listing
-(`data_service.list_orphaned`).
+(`data_service.build_data_doc` + `insert_one`, called from the
+`crawler_service.execute_crawl` saver task — per document as the crawl
+produces it, so each saved doc can be streamed to the requesting client over
+SSE) and read by the per-agent listing (`data_service.list_by_agent`) and the
+orphaned-data listing (`data_service.list_orphaned`).
 
 | Field | Type | Set how |
 |---|---|---|
@@ -246,13 +247,16 @@ when an index with the same name exists.
 
 `data`:
 
-- `insert_many(docs)` — one bulk insert per finished crawl, skipped when the
-  crawl yielded 0 items (Motor rejects `insert_many([])`).
+- `insert_one(doc)` — one insert per crawled page, as the crawl produces it
+  (the run's saver task; single consumer, so save order == crawl order). A
+  failed insert records a `request_error` failure entry and the doc is NOT
+  streamed over SSE.
 - `find({"agentId": id}).sort([("crawledAt", DESCENDING), ("_id", DESCENDING)])
   .skip(skip).limit(limit)` + `count_documents({"agentId": id})` — per-agent
   listing (`list_by_agent`, `GET /agents/{agentId}/data`): newest first, `_id`
-  tiebreaker keeps pagination deterministic (one run stamps all its docs with
-  the same `crawledAt`); served by `idx_agent_crawled`.
+  tiebreaker keeps pagination deterministic (docs now carry per-doc
+  `crawledAt` timestamps since saves are incremental); served by
+  `idx_agent_crawled`.
 - `update_many({"agentId": id}, {"$set": {"agentId": None}})` — `detach_from_agent`:
   soft-orphaning on agent deletion (`agent_service.delete_agent`) and on mid-crawl
   deletion (`crawler_service.execute_crawl` when the final status flip finds no

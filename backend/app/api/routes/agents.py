@@ -1,6 +1,9 @@
 from typing import Annotated
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, DbDep
 from app.schemas.agent import (
@@ -56,13 +59,23 @@ async def update_agent(
     return AgentOut.from_doc(doc)
 
 
-@router.get("/{agent_id}/run", response_model=AgentOut, status_code=status.HTTP_202_ACCEPTED)
-async def run_agent(agent_id: str, user: CurrentUser, db: DbDep) -> AgentOut:
-    """Launch the agent's crawl in the background. Returns the agent already
-    in "Running" state; the outcome (Completed/Stopped/Failed + crawled data)
-    is pushed over the notifications WebSocket."""
-    doc = await crawler_service.start_agent_crawl(db, agent_id, user["email"])
-    return AgentOut.from_doc(doc)
+@router.get("/{agent_id}/run")
+async def run_agent(agent_id: str, user: CurrentUser, db: DbDep) -> StreamingResponse:
+    """Launch the agent's crawl and stream it over SSE: a `start` event, one
+    `document` event per crawled page as it is saved, keep-alive comments
+    while idle, and a terminal `done` event that closes the stream (the same
+    outcome is broadcast over the notifications WebSocket for other clients).
+    Start errors (404/409/400/503) are raised BEFORE the stream opens, so
+    they surface as ordinary JSON errors."""
+    queue: asyncio.Queue = asyncio.Queue()
+    updated = await crawler_service.start_agent_crawl(
+        db, agent_id, user["email"], listener=queue
+    )
+    return StreamingResponse(
+        crawler_service.sse_events(queue, updated),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{agent_id}/stop", response_model=AgentOut, status_code=status.HTTP_202_ACCEPTED)

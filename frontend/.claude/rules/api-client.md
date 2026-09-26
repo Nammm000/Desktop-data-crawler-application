@@ -25,7 +25,7 @@ globs: ["app/api/**"]
 | `create_agent()` | `POST /api/v1/agents` | Bearer | `{name, format, script, sourceType?}` | `201 Agent` | `409` dup name, `400` invalid JSON script (or invalid source_pages structure — both pagination buttons, missing `source_pages`/`post_link`, bad `max_next`; or invalid ecommerce structure — bad `links`, both `max_next` spellings, bad `max_next`/`max_products`, non-XPath field), `422` |
 | `update_agent()` | `PATCH /api/v1/agents/{id}` | Bearer | `{name?, format?, script?, sourceType?}` (partial) | `Agent` | `409` dup name, `400` JSON check / source_pages / ecommerce structure check on merged view, `404`, `422` |
 | `delete_agent()` | `DELETE /api/v1/agents/{id}` | Bearer | — | `None` (204, empty body) | `404` |
-| `run_agent()` | `GET /api/v1/agents/{id}/run` | Bearer | — | `202 Agent` (status `Running`) | `404`, `409` already running, `400` script not runnable (incl. non-facebook links on a facebook agent), `503` credentials undecryptable |
+| `stream_agent_run()` | `GET /api/v1/agents/{id}/run` (SSE) | Bearer | — | blocking stream of `AgentRunEvent`s: `start` → `document` (AgentData per saved page) → `done` (AgentRunDone) | `404`, `409` already running, `400` script not runnable (incl. non-facebook links on a facebook agent), `503` credentials undecryptable — raised before any event |
 | `stop_agent()` | `POST /api/v1/agents/{id}/stop` | Bearer | — | `202 Agent` (still `Running`; the Stopped outcome arrives via WS) | `404`, `409` not running |
 | `set_agent_credentials()` | `PUT /api/v1/agents/{id}/credentials` | Bearer | `{cookieHeader?, proxyText?}` (raw pastes) | `200 Agent` (flags updated; values stored encrypted, never returned) | `400` unparseable, `404`, `503` key unset |
 | `get_agent_credentials_metadata()` | `GET /api/v1/agents/{id}/credentials-metadata` | Bearer | — | `AgentCredentialsMeta(cookie_names, proxy_count, updated_at)` | `404` |
@@ -56,16 +56,26 @@ globs: ["app/api/**"]
   `get_agent` single fetch — the list plus row data cover the UI.
   `create_agent` / `update_agent` strip `name` before sending (mirrors
   `signup`); `delete_agent` is 204-never-parsed like `delete_user`.
-- `run_agent` is a GET with side effects (accepted backend quirk): 202 with
-  the updated `Agent` already flipped to `Running`; the crawl finishes in the
-  background. Errors surface the backend detail verbatim (409 "Agent is
-  already running"; 400 when the script is not a JSON object with a non-empty
-  `links` list of URL strings — for `source_pages` agents, when the script
-  violates the source_pages structure rules or lists non-http(s) source
-  pages; for `ecommerce` agents, non-http(s) seeds, seeds over
-  `CRAWL_MAX_PAGES`, a `max_products` over `ECOMMERCE_MAX_PRODUCTS`, or a
-  structure violation). `sourceType` values: `"generic"` | `"facebook"` |
-  `"source_pages"` | `"ecommerce"`
+- `stream_agent_run` (replaces the old 202-JSON `run_agent`) is a GET with
+  side effects (accepted backend quirk) returning an SSE stream: it BLOCKS on
+  a worker thread until the crawl finishes, calling `on_event` with typed
+  `AgentRunEvent`s — `kind == "start"` (run confirmed), `"document"`
+  (`document: AgentData`, one per page as the backend SAVES it, in save
+  order), `"done"` (`done: AgentRunDone` with status/runtime/count/lastRun,
+  which closes the stream). Minimal SSE parsing lives here: buffer
+  event/data lines, dispatch on the blank line, ignore `:`-comments
+  (keep-alives); malformed frames parse into None-field events, never raise.
+  `timeout=(10, None)` — an unlimited READ timeout is required (the shared
+  10 s read timeout would cut the stream between keep-alives). A non-200
+  status raises BEFORE any event fires, which is what makes the session's
+  refresh-and-retry-on-401 safe (the crawl never started). Errors surface the
+  backend detail verbatim (409 "Agent is already running"; 400 when the
+  script is not a JSON object with a non-empty `links` list of URL strings —
+  for `source_pages` agents, when the script violates the source_pages
+  structure rules or lists non-http(s) source pages; for `ecommerce` agents,
+  non-http(s) seeds, seeds over `CRAWL_MAX_PAGES`, a `max_products` over
+  `ECOMMERCE_MAX_PRODUCTS`, or a structure violation). `sourceType` values:
+  `"generic"` | `"facebook"` | `"source_pages"` | `"ecommerce"`
   (source_pages runs first DISCOVER article links from the script's
   `source_pages` listing pages in headless Chromium — clicking a `next_page`
   or `load_more` button, randomized 3–120 s listing delays — then crawl the

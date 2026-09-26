@@ -92,14 +92,15 @@ app/
 ├── services/agent_service.py # agent CRUD, _validate_script (json format check);
 │                             # delete cascades via data_service.detach_from_agent
 ├── services/crawler_service.py    # AgentScriptSpider, start_agent_crawl/execute_crawl,
-│                             # run-script validation, startup Running sweep
+│                             # sse_events (SSE run stream), run-script validation,
+│                             # startup Running sweep
 ├── services/source_pages_discovery.py # source_pages agents: script parsing +
 │                             # Playwright listing-page link discovery (next_page /
 │                             # load_more button clicking, randomized delays)
 ├── services/ecommerce_spider.py  # ecommerce agents: two-phase product spider
 │                             # (listing -> product pages, pagination following),
 │                             # EcommercePlan parser, price/rating transforms
-├── services/data_service.py  # build_data_docs + insert_many (crawl results), list_by_agent,
+├── services/data_service.py  # build_data_doc + insert_one (per-doc crawl saves), list_by_agent,
 │                             # list_orphaned (deleted-agent data), delete_one / delete_many,
 │                             # detach_from_agent (agent-delete cascade) + detach_dangling_agents (startup sweep)
 ├── services/connection_manager.py # shared WS registry (manager.broadcast)
@@ -251,7 +252,7 @@ revocation step — `get_current_user` re-reads the DB doc, so a demotion costs 
 target their privileges on their very next request despite the stale JWT `role`
 claim.
 
-## Sequence: run agent crawl
+## Sequence: run agent crawl (SSE)
 
 ```mermaid
 sequenceDiagram
@@ -263,21 +264,24 @@ sequenceDiagram
     participant DB as MongoDB
 
     C->>R: Bearer token
-    R->>S: start_agent_crawl(db, agentId, email)
+    R->>S: start_agent_crawl(db, agentId, email, listener=SSE queue)
     S->>S: _parse_run_script (400 unless json + links + xpath fields)
     S->>DB: find_one_and_update({status != Running} → Running)
     alt claim lost
-        R-->>C: 409 (already running) / 404 (deleted)
+        R-->>C: 409 (already running) / 404 (deleted) — JSON, stream never opens
     else claimed
         S->>WS: broadcast agentStatus Running
         S->>S: asyncio.create_task(execute_crawl)
-        R-->>C: 202 AgentOut (Running)
+        R-->>C: 200 text/event-stream (sse_events: `start`, then queue-driven)
         Note over SC: in-process, pure asyncio<br/>(TWISTED_REACTOR_ENABLED=False)
         SC->>SC: GET each link; per field try XPaths in order
-        SC-->>S: results [{url, fields}]
-        S->>DB: data.insert_many (skipped when 0 items)
-        S->>DB: status → Completed (or Failed on crash)
+        SC-->>S: on_result({url, fields}) per page (shared results list too)
+        S->>DB: data.insert_one (per doc, via the saver task)
+        S->>C: SSE event: document (DataOut) — only after the save
+        Note over C,S: keep-alive comment every 15 s of silence;<br/>a client disconnect unregisters the queue,<br/>the crawl keeps running
+        S->>S: drain saver → lastRun → status → Completed/Stopped/Failed
         S->>WS: broadcast agentStatus Completed + runtimeSeconds + count + data
+        S->>C: SSE event: done (closes the stream)
     end
 ```
 

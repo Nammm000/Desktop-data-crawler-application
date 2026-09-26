@@ -47,14 +47,15 @@ curl -s -X POST $BASE/agents -H "Authorization: Bearer $TOKEN" \
                \"next_page\":\"//a\",\"load_more\":\"//b\"}"}'
 # -> 400 "script cannot contain both 'next_page' and 'load_more' - choose one pagination mode"
 
-# 201 happy path, then run: 202 -> Completed with discovered articles
+# 201 happy path, then run: SSE stream (start -> document events as pages
+# are saved -> done with the Completed summary)
 curl -s -X POST $BASE/agents -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{
     "name":"sp-ok","format":"json","sourceType":"source_pages",
     "script":"{\"source_pages\":[\"https://e.vnexpress.net/news/tech/tech-news\"],
                \"post_link\":\"//h2/a/@href\",\"max_next\":1,
                \"title\":[\"//meta[@property=\'og:title\']/@content\",\"//title\"]}"}'
-curl -s $BASE/agents/<agentId>/run -H "Authorization: Bearer $TOKEN"     # 202
+curl -sN $BASE/agents/<agentId>/run -H "Authorization: Bearer $TOKEN"    # SSE
 # PATCHing a generic agent to sourceType source_pages keeping a links-style
 # script also 400s (merged-view structure check)
 ```

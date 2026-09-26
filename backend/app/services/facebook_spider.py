@@ -86,6 +86,7 @@ class FacebookPostSpider(Spider):
         cookies: dict[str, str] | None = None,
         proxies: list[str] | None = None,
         fb_host: str = "mbasic.facebook.com",
+        on_result=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -94,6 +95,7 @@ class FacebookPostSpider(Spider):
         self._field_xpaths = {**_BUILT_IN_FIELDS, **(field_xpaths or {})}
         self._results = results if results is not None else []
         self._failures = failures if failures is not None else []
+        self._on_result = on_result
         self._cookies = cookies
         self._proxy_cycle = (
             itertools.cycle(proxies) if proxies else None  # round-robin
@@ -132,7 +134,10 @@ class FacebookPostSpider(Spider):
                 }
             )
             return
-        self._results.append({"url": response.url, "fields": fields})
+        item = {"url": response.url, "fields": fields}
+        self._results.append(item)
+        if self._on_result is not None:
+            self._on_result(item)
 
     @staticmethod
     def _extract(response: Response, xpaths: list[str]) -> str | None:

@@ -47,9 +47,11 @@ SPA consumes this API. App metadata: `FastAPI(title="Data Crawler API", version=
   script, unique names, JSON scripts validated on create and on the merged update view
 - Agent runs (`GET /agents/{agentId}/run`): executes the script as a background
   Scrapy crawl (in-process, pure asyncio), atomically flips status
-  New → Running → Completed/Failed, persists one `data` doc per crawled page,
-  and broadcasts status frames (Completed carries the crawled data) to all
-  connected WebSocket clients
+  New → Running → Completed/Failed, persists one `data` doc per crawled page
+  (saved one by one as the crawl produces them), streams each SAVED doc to the
+  requesting client over SSE (`event: document`, terminal `event: done`; a
+  client disconnect does not stop the crawl), and broadcasts status frames
+  (Completed carries the crawled data) to all connected WebSocket clients
 - source_pages agents (`sourceType: "source_pages"`): instead of explicit
   `links`, the run first discovers article links from listing pages in
   headless Chromium (Playwright) — collecting via `post_link` XPaths and
@@ -113,7 +115,7 @@ All routes are prefixed `/api/v1`; JSON is camelCase. Errors use FastAPI's
 | GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` | `401`, `404` "Agent not found" |
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200 AgentOut` | `400` invalid JSON script (merged view), `409` dup name, `404`, `422` |
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` (its data docs' `agentId` → `null`; `agentName` kept) | `401`, `404` |
-| GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl runs in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, too many links) |
+| GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `200 text/event-stream`: `start` → per-doc `document` events as each page is saved → `done` (status/runtimeSeconds/count/lastRun); keep-alive comments while idle; client disconnect does not stop the crawl | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, too many links) — JSON errors before the stream opens |
 | GET | `/api/v1/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first) | `401`, `404` "Agent not found" |
 | GET | `/api/v1/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0, def 0) | `200 DataList` `{data: [DataOut], total}` (newest first; docs whose agent was deleted — `agentId` is `null`) | `401`, `422` |
 | DELETE | `/api/v1/data` | Bearer | `{ids}` (list, ≥1) | `200 {deleted: n}` (unknown ids don't count) | `401`, `422` |

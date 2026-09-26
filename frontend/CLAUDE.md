@@ -34,9 +34,9 @@ thread via queued signals — workers never touch widgets.
 
 ```
 app/
-├── api/client.py               # ApiClient: all 25 endpoints, camelCase JSON, ApiError; websocket_url + parse_notification + parse_agent_status
+├── api/client.py               # ApiClient: all endpoints, camelCase JSON, ApiError; websocket_url + parse_notification + parse_agent_status + stream_agent_run (SSE run stream)
 ├── core/worker.py              # run_async(): pool threads -> queued signals (GUI thread)
-├── core/session.py             # SessionController: tokens, refresh, QSettings, forced logout
+├── core/session.py             # SessionController: tokens, refresh, QSettings, forced logout, run_agent_stream (SSE signal bridge)
 ├── core/notifications.py       # NotificationClient: QWebSocket stream + 5 s reconnect (GUI thread)
 ├── core/cookies.py             # cookie-header parse + paste preview (mirrors the backend parser)
 ├── ui/widgets.py               # PasswordLineEdit, chosen_combo (macOS-safe combos)
@@ -133,9 +133,18 @@ app/
   once an agent is selected). Row counts render as "of N" beside every
   `#limitSelector`; no "N users / N agents / N records" count subtitles
 - A per-row Run button (no confirm; `#rowRunButton` play.svg) starts the
-  agent's crawl — 202 on a GET-with-side-effects — and reloads the table
-  (status flips to Running, button disables); 409/400/404 land in the banner
-  verbatim. Clicking an agent name (indigo link) selects it: the lower
+  agent's crawl — an SSE GET-with-side-effects (`session.run_agent_stream`)
+  — and reloads the table (status flips to Running, button disables);
+  409/400/404 land in the banner verbatim. While no other run is live and no
+  data fetch is in flight, the run enters LIVE MODE: the lower pane appears
+  for that agent (subtitle `"<agent name> — running…"`) and every `document` event
+  appends the just-saved record as the LAST row (`_append_data_row`,
+  auto-scroll, count label grows); `_reload_data` no-ops while
+  `_live_active` so WS-triggered refreshes don't repaint mid-stream; the
+  terminal `done` event exits live mode and resyncs both sections (canonical
+  newest-first listing replaces the live rows). A second concurrent run
+  never hijacks the live table; an explicit name click ends live mode (the
+  stream keeps running). Clicking an agent name (indigo link) selects it: the lower
   splitter pane's `#dataTable` shows its crawled records (own
   banner/progress/bulk bar/pagination, busy flags independent of the agents
   section) with per-row + checkbox bulk deletes (confirm, danger, one in

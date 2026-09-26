@@ -15,12 +15,20 @@ globs: ["app/core/**", "app/ui/**"]
   slots run on the GUI thread even when emitted from a pool thread.
 - New async work follows the same shape: blocking closure plus success/error
   callbacks; the 10 s request timeout stays the worst-case bound.
+  EXCEPTION — long streams: the SSE run stream
+  (`SessionController.run_agent_stream`) blocks a worker for the whole crawl
+  and uses `timeout=(10, None)` (connect bounded, read unbounded — the
+  server emits keep-alive comments); its per-document events cross to the
+  GUI thread through a `_StreamBridge` QObject created on the GUI thread
+  (auto → queued), held in `_ACTIVE_STREAMS` and released in the run_async
+  callbacks so it is never destroyed on the pool thread while a queued
+  emission is pending (same lifetime rule as worker.py's `_PENDING`).
 
 ## GUI thread
 
 - `SessionController` exposes GUI-thread entry points (`bootstrap`,
   `login_and_start`, `signup_and_start`, `logout`, `fetch_current_user`,
-  `change_password`, plus the notification-stream helpers
+  `change_password`, `run_agent_stream`, plus the notification-stream helpers
   `current_access_token` / `refresh_access_token`) that spawn `run_async`
   work — UI code calls only these, never `ApiClient` directly.
 - QSettings is not thread-safe: persistence happens only in slots connected

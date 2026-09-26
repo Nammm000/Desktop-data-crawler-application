@@ -1,7 +1,8 @@
-"""Persistence for the `data` collection — written by crawler runs, read by
-the per-agent data listing and the orphaned-data listing, agent-detached
-(agentId -> null) on agent deletion and by the startup sweep, deleted by the
-data endpoints."""
+"""Persistence for the `data` collection — written by crawler runs (one
+insert per document as the crawl produces it, so each doc can be streamed to
+the requesting client right after its save), read by the per-agent data
+listing and the orphaned-data listing, agent-detached (agentId -> null) on
+agent deletion and by the startup sweep, deleted by the data endpoints."""
 
 import logging
 import uuid
@@ -16,29 +17,26 @@ from app.models.data import DATA_COLLECTION
 logger = logging.getLogger(__name__)
 
 
-def build_data_docs(agent: dict, results: list[dict]) -> list[dict]:
-    """Map spider results ({"url", "fields"}) to `data` documents. Pure, no
-    I/O. `agent` is the at-run-start snapshot: {"id", "name"} — the snapshot
-    agentId is nulled later if the agent is deleted (detach_from_agent)."""
-    now = datetime.now(timezone.utc)
-    return [
-        {
-            "_id": str(uuid.uuid4()),
-            "agentId": agent["id"],
-            "agentName": agent["name"],
-            "url": item["url"],
-            "fields": item["fields"],
-            "crawledAt": now,
-        }
-        for item in results
-    ]
+def build_data_doc(agent: dict, item: dict) -> dict:
+    """Map one spider result ({"url", "fields"}) to a `data` document. Pure,
+    no I/O. `agent` is the at-run-start snapshot: {"id", "name"} — the
+    snapshot agentId is nulled later if the agent is deleted
+    (detach_from_agent). Each doc gets its own crawledAt (docs are saved as
+    the crawl produces them); sort ties break by _id."""
+    return {
+        "_id": str(uuid.uuid4()),
+        "agentId": agent["id"],
+        "agentName": agent["name"],
+        "url": item["url"],
+        "fields": item["fields"],
+        "crawledAt": datetime.now(timezone.utc),
+    }
 
 
-async def insert_many(db: AsyncIOMotorDatabase, docs: list[dict]) -> list[dict]:
-    """Bulk-insert crawl results. The caller guards the empty case — Motor
-    raises InvalidOperation on insert_many([])."""
-    await db[DATA_COLLECTION].insert_many(docs)
-    return docs
+async def insert_one(db: AsyncIOMotorDatabase, doc: dict) -> None:
+    """Persist one crawl result (saved per-document so the run can stream
+    each doc to the requesting client right after its save)."""
+    await db[DATA_COLLECTION].insert_one(doc)
 
 
 async def list_by_agent(

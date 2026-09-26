@@ -100,11 +100,19 @@ Checklist before finishing any change (covers every endpoint):
   page clamps the page index; delete while the backend is down → banner +
   resync; deleting an already-removed agent (second user/curl) → "Agent not
   found" banner + resync
-- Agent run: per-row play button (no confirm) → the row flips to Running and
-  the button disables ("already running" tooltip); a curl run while the app
-  still shows New → 409 banner + resync; agent whose script is not a JSON
-  object with `links` (e.g. `{"nope":1}` or an md script) → 400 detail
-  banner; agent deleted via curl → "Agent not found" + resync; the row
+- Agent run (SSE live table): per-row play button (no confirm) → the row
+  flips to Running, the button disables ("already running" tooltip), the
+  lower data pane appears for that agent ("running…" subtitle) and crawled
+  records APPEND one by one as the backend saves them (crawl order,
+  auto-scroll, count label grows); on completion the pane refreshes to the
+  canonical newest-first listing and the agents row shows the terminal
+  status + lastRun; a curl run while the app still shows New → 409 banner +
+  resync (and no live pane); agent whose script is not a JSON object with
+  `links` (e.g. `{"nope":1}` or an md script) → 400 detail banner (empty
+  live pane dropped); agent deleted via curl → "Agent not found" + resync;
+  stopping mid-run keeps the partial live rows, then resyncs to Stopped;
+  clicking another agent's name during the live run ends live mode (the
+  stream finishes silently; the row still flips via the WS push); the row
   flips to Completed/Failed live when the WS agentStatus push lands and the
   Agents page is visible (also flips to Running live for curl/other-user
   runs); on any other page the status appears on re-entry

@@ -31,6 +31,23 @@ _REFRESH_TOKEN_KEY = "auth/refreshToken"
 SESSION_EXPIRED_MESSAGE = "Your session expired. Please sign in again."
 
 
+class _StreamBridge(QObject):
+    """Delivers SSE events from a worker thread to the GUI thread. Created on
+    the GUI thread (in run_agent_stream) so the auto-connection resolves to a
+    queued connection — same discipline as app.core.worker._TaskSignals.
+    Held in _ACTIVE_STREAMS until the run_async callbacks release it on the
+    GUI thread: the worker's closure is the only other reference, and it
+    drops on the pool thread — destroying the QObject there while a queued
+    emission is still pending would crash."""
+
+    event = Signal(object)  # AgentRunEvent
+
+
+# Live stream bridges — see _StreamBridge (release happens on the GUI thread
+# in the run_agent_stream callbacks, after queued events have delivered).
+_ACTIVE_STREAMS: set[_StreamBridge] = set()
+
+
 class SessionController(QObject):
     session_started = Signal(object)  # User
     session_ended = Signal(str)  # "" on manual logout, message otherwise
@@ -366,20 +383,74 @@ class SessionController(QObject):
 
         run_async(work, on_success or (lambda _none: None), on_error or (lambda _exc: None))
 
-    def run_agent(
+    def run_agent_stream(
         self,
         agent_id: str,
-        on_success: Callable[[Agent], None] | None = None,
+        on_event: Callable[[object], None],
         on_error: Callable[[Exception], None] | None = None,
+        on_finished: Callable[[], None] | None = None,
     ) -> None:
-        def work() -> Agent:
-            return self._authorized_call(
-                lambda token: self._client.run_agent(
-                    access_token=token, agent_id=agent_id
-                )
-            )
+        """Start an agent run and stream it (SSE): documents arrive one by
+        one as the backend saves them. `on_event` receives AgentRunEvent
+        objects on the GUI thread; `on_finished` fires when the stream ends
+        (after the terminal `done` event).
 
-        run_async(work, on_success or (lambda _agent: None), on_error or (lambda _exc: None))
+        Auth differs from _authorized_call: a 401 raised BEFORE any event
+        (handshake failure — the crawl never started) refreshes once and
+        retries; a failure AFTER events started is surfaced as an error
+        without retry or logout (the crawl keeps running server-side and its
+        outcome still lands via the notifications WebSocket)."""
+        bridge = _StreamBridge()
+        _ACTIVE_STREAMS.add(bridge)
+        bridge.event.connect(on_event)
+
+        def work() -> None:
+            generation = self._session_generation
+            access_token = self._access_token
+            delivered = False  # worker-local: flipped before the first dispatch
+
+            def dispatch(event) -> None:
+                nonlocal delivered
+                delivered = True
+                if generation == self._session_generation:
+                    bridge.event.emit(event)
+
+            try:
+                self._client.stream_agent_run(
+                    access_token=access_token, agent_id=agent_id, on_event=dispatch
+                )
+                return
+            except ApiError as exc:
+                if exc.status_code != 401 or delivered or not self._refresh_token:
+                    raise
+            try:
+                access_token = self._rotate_tokens(stale_access=access_token)
+            except ApiError:
+                self._force_logout()
+                raise
+            try:
+                self._client.stream_agent_run(
+                    access_token=access_token, agent_id=agent_id, on_event=dispatch
+                )
+            except ApiError as exc:
+                if exc.status_code == 401:
+                    self._force_logout()
+                raise
+
+        def _release() -> None:
+            _ACTIVE_STREAMS.discard(bridge)
+
+        def _finished() -> None:
+            _release()
+            if on_finished is not None:
+                on_finished()
+
+        def _failed(exc: Exception) -> None:
+            _release()
+            if on_error is not None:
+                on_error(exc)
+
+        run_async(work, _finished, _failed)
 
     def stop_agent(
         self,

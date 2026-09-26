@@ -47,7 +47,7 @@ app/
 ├── services/user_service.py  # user CRUD, duplicate detection, password updates
 ├── services/token_service.py # refresh token issue/rotate/revoke, reuse detection
 ├── services/agent_service.py # agent CRUD, script JSON validation (delete cascades via data_service)
-├── services/crawler_service.py   # generic spider + run orchestration (run/stop, lastRun), WS status broadcasts
+├── services/crawler_service.py   # generic spider + run orchestration (run/stop, lastRun), SSE run stream (sse_events), WS status broadcasts
 ├── services/facebook_spider.py    # Facebook post spider (mbasic, cookies/proxies, failure classification)
 ├── services/source_pages_discovery.py  # source_pages agents: script parsing + Playwright listing-page link discovery (next_page/load_more clicking)
 ├── services/ecommerce_spider.py   # ecommerce agents: two-phase product spider (listings -> products, pagination), plan parser, price/rating helpers
@@ -56,7 +56,7 @@ app/
 ├── services/connection_manager.py # shared WS registry for backend broadcasts
 └── api/
     ├── deps.py               # get_current_user / get_current_admin, DbDep, CurrentUser
-    └── routes/               # auth.py (5 auth endpoints), users.py (GET /users/me), agents.py (7 agent endpoints incl. /run), data.py (3 data endpoints incl. GET /orphaned), notifications.py (1 WS endpoint)
+    └── routes/               # auth.py (5 auth endpoints), users.py (GET /users/me), agents.py (7 agent endpoints incl. the SSE /run stream), data.py (3 data endpoints incl. GET /orphaned), notifications.py (1 WS endpoint)
 ```
 
 ## Golden Rules

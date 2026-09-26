@@ -230,6 +230,7 @@ class EcommerceProductSpider(Spider):
         max_next: int | None = None,
         max_products: int | None = None,
         stats: dict[str, int] | None = None,
+        on_result=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -246,6 +247,7 @@ class EcommerceProductSpider(Spider):
         self._field_xpaths = {**_BUILT_IN_FIELDS, **(field_xpaths or {})}
         self._results = results if results is not None else []
         self._failures = failures if failures is not None else []
+        self._on_result = on_result
         self._max_next = max_next
         self._max_products = max_products
         self._capped = False  # set once max_products is reached
@@ -366,7 +368,10 @@ class EcommerceProductSpider(Spider):
             # The absolute final URL is the product URL (overridable via
             # script) — facebook's permalink idiom.
             fields["productUrl"] = response.url
-        self._results.append({"url": response.url, "fields": fields})
+        item = {"url": response.url, "fields": fields}
+        self._results.append(item)
+        if self._on_result is not None:
+            self._on_result(item)
 
     def _transform(
         self, field: str, response: Response, raw: str | None

@@ -7,9 +7,11 @@ normalized into ApiError with a human-readable message.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Callable
 from urllib.parse import quote
 
 import requests
@@ -118,6 +120,26 @@ class AgentData:
 class AgentDataPage:
     data: tuple[AgentData, ...]
     total: int
+
+
+@dataclass(frozen=True)
+class AgentRunDone:
+    """Terminal frame of the SSE run stream (closes the stream)."""
+
+    status: str  # "Completed" | "Stopped" | "Failed"
+    runtime_seconds: float | None
+    count: int | None
+    message: str | None  # Failed frames only
+    last_run: AgentLastRun | None
+
+
+@dataclass(frozen=True)
+class AgentRunEvent:
+    """One parsed SSE frame from a run stream."""
+
+    kind: str  # "start" | "document" | "done" (unknown kinds pass through)
+    document: AgentData | None = None  # kind == "document"
+    done: AgentRunDone | None = None  # kind == "done"
 
 
 @dataclass(frozen=True)
@@ -275,6 +297,19 @@ def parse_agent_status(data: dict) -> AgentStatusEvent | None:
         agent_name=str(data.get("agentName") or ""),
         status=str(data.get("status") or ""),
         created_at=_parse_timestamp(data.get("createdAt")),
+        runtime_seconds=float(runtime) if isinstance(runtime, (int, float)) else None,
+        count=int(count) if isinstance(count, int) else None,
+        message=str(data["message"]) if data.get("message") else None,
+        last_run=_parse_last_run(data.get("lastRun")),
+    )
+
+
+def _parse_run_done(data: dict) -> AgentRunDone:
+    """Terminal SSE frame -> AgentRunDone; null-tolerant like the WS frames."""
+    runtime = data.get("runtimeSeconds")
+    count = data.get("count")
+    return AgentRunDone(
+        status=str(data.get("status") or ""),
         runtime_seconds=float(runtime) if isinstance(runtime, (int, float)) else None,
         count=int(count) if isinstance(count, int) else None,
         message=str(data["message"]) if data.get("message") else None,
@@ -537,14 +572,89 @@ class ApiClient:
         # 204 with an empty body: _request returns None, nothing to parse.
         self._request("DELETE", f"/api/v1/agents/{agent_id}", bearer=access_token)
 
-    def run_agent(self, *, access_token: str, agent_id: str) -> Agent:
-        # GET with side effects (backend contract): 202, body = the updated
-        # AgentOut already flipped to "Running"; the crawl finishes in the
-        # background and its rows land in the data collection.
-        payload = self._request(
-            "GET", f"/api/v1/agents/{agent_id}/run", bearer=access_token
-        )
-        return _parse_or_fail(payload, _parse_agent)
+    def stream_agent_run(
+        self,
+        *,
+        access_token: str,
+        agent_id: str,
+        on_event: Callable[[AgentRunEvent], None],
+    ) -> None:
+        """Open the SSE run stream (GET /agents/{id}/run) and BLOCK until the
+        crawl finishes, dispatching one typed AgentRunEvent per frame. Worker
+        threads only — on_event fires there; SessionController marshals the
+        events to the GUI thread via a signal bridge. The read timeout is
+        None: the server keeps the stream warm with keep-alive comments, and
+        the shared 10 s timeout would cut an idle stream between them. A
+        non-200 status raises BEFORE any event fires, so a 401/409/400/404
+        means the crawl never started (safe to refresh-and-retry on 401)."""
+        url = f"{self.base_url}/api/v1/agents/{agent_id}/run"
+        try:
+            response = self._session.get(
+                url,
+                headers={
+                    "Accept": "text/event-stream",
+                    "Authorization": f"Bearer {access_token}",
+                },
+                stream=True,
+                timeout=(self.timeout, None),
+            )
+        except requests.RequestException:
+            raise ApiError(f"Could not reach the server at {self.base_url}") from None
+
+        with response:
+            if not response.ok:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = None
+                raise ApiError(
+                    self._error_message(response.status_code, payload),
+                    response.status_code,
+                )
+            # Minimal SSE parsing: buffer event/data lines, dispatch on the
+            # blank line, ignore comment lines (": keep-alive").
+            event_name = ""
+            data_lines: list[str] = []
+            for line in response.iter_lines(decode_unicode=True):
+                if line is None:
+                    continue
+                if line == "":
+                    if data_lines:
+                        on_event(
+                            self._parse_run_event(
+                                event_name or "message", "\n".join(data_lines)
+                            )
+                        )
+                    event_name = ""
+                    data_lines = []
+                elif line.startswith(":"):
+                    continue  # keep-alive comment
+                elif line.startswith("event:"):
+                    event_name = line[len("event:") :].strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line[len("data:") :].strip())
+
+    @staticmethod
+    def _parse_run_event(event: str, data: str) -> AgentRunEvent:
+        """Never raises: a malformed frame parses into a None-field event so
+        a bad payload cannot take the GUI down (same tolerance as
+        parse_agent_status)."""
+        try:
+            payload = json.loads(data)
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if event == "document":
+            try:
+                return AgentRunEvent(
+                    kind="document", document=_parse_agent_data(payload)
+                )
+            except (KeyError, TypeError, ValueError):
+                return AgentRunEvent(kind="document")
+        if event == "done":
+            return AgentRunEvent(kind="done", done=_parse_run_done(payload))
+        return AgentRunEvent(kind=event or "message")
 
     def stop_agent(self, *, access_token: str, agent_id: str) -> Agent:
         # 202; the agent is still "Running" in this body — the Stopped

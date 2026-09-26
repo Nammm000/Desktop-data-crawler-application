@@ -3,12 +3,14 @@
 Route-facing entry point: `start_agent_crawl` — validates the script,
 atomically flips the agent to "Running", broadcasts the status, then spawns
 `execute_crawl` as a fire-and-forget asyncio task and returns the updated
-agent (the route answers 202). `execute_crawl` drives a per-run
+agent. The /run route consumes the run as SSE (`sse_events`): documents are
+inserted one by one as the crawl produces them and each saved doc is pushed
+to every registered listener queue immediately, so the requesting client
+sees records stream in live. `execute_crawl` drives a per-run
 AsyncCrawlerRunner in pure-asyncio mode (TWISTED_REACTOR_ENABLED=False — the
-default Twisted reactor would collide with uvicorn's loop), inserts one
-`data` doc per crawled page (nulling their agentId when the agent was
-deleted mid-run), then flips the agent to "Completed"/"Failed"
-and broadcasts the outcome with the crawled data.
+default Twisted reactor would collide with uvicorn's loop), nulls the saved
+docs' agentId when the agent was deleted mid-run, then flips the agent to
+"Completed"/"Failed" and broadcasts the outcome with the crawled data.
 
 source_pages agents run in two phases inside `execute_crawl`: a Playwright
 listing-page discovery first (source_pages_discovery.discover_links —
@@ -70,11 +72,15 @@ class _RunningCrawl:
     """One in-flight run. `runner` is attached as soon as execute_crawl
     builds it, so a stop request can reach the crawler; `stop_requested`
     tells the finishing execute_crawl that Stopped (not Completed) is the
-    right terminal status."""
+    right terminal status. `listeners` holds the SSE event queues of clients
+    streaming this run (the /run route registers its queue via
+    start_agent_crawl BEFORE the crawl task is spawned, so no document event
+    can be missed)."""
 
     task: asyncio.Task[None]
     runner: AsyncCrawlerRunner | None = None
     stop_requested: bool = False
+    listeners: list[asyncio.Queue] = dataclasses.field(default_factory=list)
 
 
 # In-flight crawls keyed by agent id. Holds strong references to the
@@ -114,6 +120,7 @@ class AgentScriptSpider(Spider):
         field_xpaths: dict[str, list[str]] | None = None,
         results: list[dict] | None = None,
         failures: list[dict] | None = None,
+        on_result=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -121,6 +128,7 @@ class AgentScriptSpider(Spider):
         self._field_xpaths = field_xpaths or {}
         self._results = results if results is not None else []
         self._failures = failures if failures is not None else []
+        self._on_result = on_result
 
     async def start(self):
         # Explicit requests (not the plain start_urls default) so every link
@@ -155,7 +163,10 @@ class AgentScriptSpider(Spider):
                     "detail": "page fetched but no XPath matched any field",
                 }
             )
-        self._results.append({"url": response.url, "fields": fields})
+        item = {"url": response.url, "fields": fields}
+        self._results.append(item)
+        if self._on_result is not None:
+            self._on_result(item)
 
     def _on_error(self, failure):
         """Errback for every link: classify the download failure so the run
@@ -401,6 +412,53 @@ def _status_frame(agent: dict, agent_status: str, **extra) -> dict:
     return frame
 
 
+# Seconds of stream silence before sse_events emits a keep-alive comment
+# (holds proxies / load balancers open during long crawls).
+_SSE_KEEPALIVE_SECONDS = 15.0
+
+
+def _push_event(agent_id: str, event: dict) -> None:
+    """Deliver one SSE event to every live listener of the run. Listeners
+    are plain in-memory queues on the registry entry — put_nowait is safe on
+    the single event loop, and a run is bounded by CRAWL_MAX_PAGES so an
+    un-consumed queue cannot grow without limit."""
+    entry = _running_crawls.get(agent_id)
+    if entry is None:
+        return
+    for queue in list(entry.listeners):  # snapshot: mutation-safe
+        queue.put_nowait(event)
+
+
+def _done_event(
+    frame_agent: dict,
+    agent_status: str,
+    *,
+    runtime_seconds: float,
+    last_run: dict | None = None,
+    count: int | None = None,
+    message: str | None = None,
+) -> dict:
+    """Terminal SSE event (closes the stream). Same vocabulary as the WS
+    terminal frame; lastRun datetimes ride the wire as ISO strings."""
+    data: dict = {
+        "agentId": frame_agent["_id"],
+        "agentName": frame_agent["name"],
+        "status": agent_status,
+        "runtimeSeconds": runtime_seconds,
+    }
+    if count is not None:
+        data["count"] = count
+    if message is not None:
+        data["message"] = message
+    if last_run is not None:
+        data["lastRun"] = {
+            **last_run,
+            "startedAt": last_run["startedAt"].isoformat(),
+            "finishedAt": last_run["finishedAt"].isoformat(),
+        }
+    return {"event": "done", "data": data}
+
+
 async def _set_agent_status(
     db: AsyncIOMotorDatabase,
     agent_id: str,
@@ -426,10 +484,16 @@ async def _set_agent_status(
 
 
 async def start_agent_crawl(
-    db: AsyncIOMotorDatabase, agent_id: str, acting_email: str
+    db: AsyncIOMotorDatabase,
+    agent_id: str,
+    acting_email: str,
+    *,
+    listener: asyncio.Queue | None = None,
 ) -> dict:
     """Validate -> atomically claim (status -> Running) -> broadcast -> spawn.
-    Raises 404 (unknown id), 409 (already running), 400 (script not runnable)."""
+    Raises 404 (unknown id), 409 (already running), 400 (script not runnable).
+    `listener` (the SSE route's event queue) is registered on the run entry
+    BEFORE the crawl task is spawned, so no document event can be missed."""
     settings = get_settings()
 
     in_flight = _running_crawls.get(agent_id)
@@ -522,8 +586,47 @@ async def start_agent_crawl(
             ecommerce_plan=ecommerce_plan,
         )
     )
-    _running_crawls[agent_id] = _RunningCrawl(task=crawl_task)
+    _running_crawls[agent_id] = _RunningCrawl(
+        task=crawl_task, listeners=[listener] if listener is not None else []
+    )
     return updated
+
+
+async def sse_events(queue: asyncio.Queue, agent: dict):
+    """SSE body for the /run route: a `start` frame, then one `document`
+    frame per crawled page as it is saved (queued by the run's saver task),
+    keep-alive comments while idle, and the terminal `done` frame that closes
+    the stream. `agent` is the freshly claimed agent doc (status Running).
+    The finally clause unregisters the queue on any exit, including a client
+    disconnect (the generator is cancelled) — the crawl itself is unaffected."""
+    agent_id = agent["_id"]
+
+    def _frame(event: str, payload: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    try:
+        yield _frame(
+            "start",
+            {"agentId": agent_id, "agentName": agent["name"], "status": AgentStatus.RUNNING},
+        )
+        while True:
+            try:
+                event = await asyncio.wait_for(
+                    queue.get(), timeout=_SSE_KEEPALIVE_SECONDS
+                )
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"
+                continue
+            yield _frame(event["event"], event["data"])
+            if event["event"] == "done":
+                return
+    finally:
+        entry = _running_crawls.get(agent_id)
+        if entry is not None:
+            try:
+                entry.listeners.remove(queue)
+            except ValueError:
+                pass  # already gone (entry replaced or run finished)
 
 
 async def stop_agent_crawl(
@@ -595,8 +698,9 @@ async def execute_crawl(
     source_pages_plan: SourcePagesPlan | None = None,
     ecommerce_plan: EcommercePlan | None = None,
 ) -> None:
-    """Background body: crawl -> persist -> status flip -> broadcast. Never
-    raises (the Failed path swallows and logs); always deregisters itself.
+    """Background body: crawl -> persist (per document, streaming each saved
+    doc to the run's SSE listeners) -> status flip -> broadcast. Never raises
+    (the Failed path swallows and logs); always deregisters itself.
     source_pages agents: Playwright discovery first (links start unknown),
     then the discovered links go through the regular spider crawl.
     ecommerce agents: the EcommerceProductSpider discovers the product links
@@ -609,6 +713,43 @@ async def execute_crawl(
     results: list[dict] = []  # the spider appends via this shared ref
     failures: list[dict] = []  # errback + parse classify into this one
     spider_stats: dict[str, int] = {}  # ecommerce discovered/attempted counts
+    saved_docs: list[dict] = []  # persisted docs (drives count/data/broadcast)
+    # Spider results cross into the async saver through this queue: parse
+    # callbacks are sync, so they only put_nowait; the single consumer below
+    # preserves save/emit order.
+    doc_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+    def _on_result(item: dict) -> None:
+        doc_queue.put_nowait(item)
+
+    async def _persist_and_stream() -> None:
+        """Consume doc_queue: persist each spider result as it lands, then
+        stream the SAVED doc to every listener (the requirement: a document
+        is sent only after its save). The None sentinel ends the loop."""
+        while True:
+            item = await doc_queue.get()
+            if item is None:
+                return
+            doc = data_service.build_data_doc(agent_snapshot, item)
+            try:
+                await data_service.insert_one(db, doc)
+            except Exception:
+                logger.exception(
+                    "Persisting a crawl result for agent %s failed", agent_id
+                )
+                failures.append(
+                    {
+                        "url": item["url"],
+                        "reason": FailureReason.REQUEST_ERROR,
+                        "detail": "saving the crawled page to the database "
+                        "failed; it was not streamed",
+                    }
+                )
+                continue
+            saved_docs.append(doc)
+            payload = DataOut.from_doc(doc).model_dump(mode="json", by_alias=True)
+            _push_event(agent_id, {"event": "document", "data": payload})
+
     settings = get_settings()
     crawl_settings = _scrapy_settings(settings)
     spider_class: type = AgentScriptSpider
@@ -638,6 +779,7 @@ async def execute_crawl(
             "stats": spider_stats,
         }
     try:
+        saver = asyncio.create_task(_persist_and_stream())
         entry = _running_crawls.get(agent_id)
         skip_crawl = False
         if source_pages_plan is not None:
@@ -678,6 +820,7 @@ async def execute_crawl(
                 field_xpaths=field_xpaths or {},
                 results=results,
                 failures=failures,
+                on_result=_on_result,
                 **spider_kwargs,
             )
         stopped = entry is not None and entry.stop_requested
@@ -725,9 +868,12 @@ async def execute_crawl(
                             "were not fetched before the stop",
                         }
                     )
-        docs = data_service.build_data_docs(agent_snapshot, results)
-        if docs:  # pymongo rejects insert_many([]) — 0-item runs skip persistence
-            await data_service.insert_many(db, docs)
+        # Drain the saver BEFORE finalizing: every doc must be persisted (and
+        # streamed) before the terminal status/events — and before the
+        # mid-crawl detach below, or a doc still in the queue would land with
+        # a dangling agentId after it.
+        doc_queue.put_nowait(None)
+        await saver
         outcome = LastRunOutcome.STOPPED if stopped else LastRunOutcome.COMPLETED
         last_run = _build_last_run(
             started_at=started_wall,
@@ -749,12 +895,13 @@ async def execute_crawl(
             # invisible to the null-based orphaned listing — detach them now
             # (the startup sweep is the backstop if we crash right here).
             await data_service.detach_from_agent(db, agent_id)
+        runtime = round(time.monotonic() - started, 1)
         await connection_manager.manager.broadcast(
             _status_frame(
                 frame_agent,
                 agent["status"] if agent else outcome,
-                runtimeSeconds=round(time.monotonic() - started, 1),
-                count=len(docs),
+                runtimeSeconds=runtime,
+                count=len(saved_docs),
                 lastRun={
                     **last_run,
                     # datetimes over the wire as ISO strings (DataOut payloads
@@ -764,12 +911,27 @@ async def execute_crawl(
                 },
                 data=[
                     DataOut.from_doc(d).model_dump(mode="json", by_alias=True)
-                    for d in docs
+                    for d in saved_docs
                 ],
             )
         )
+        _push_event(
+            agent_id,
+            _done_event(
+                frame_agent,
+                agent["status"] if agent else outcome,
+                runtime_seconds=runtime,
+                last_run=last_run,
+                count=len(saved_docs),
+            ),
+        )
     except Exception:
         logger.exception("Crawl for agent %s failed", agent_id)
+        try:  # best-effort saver drain — flush docs saved before the crash
+            doc_queue.put_nowait(None)
+            await saver
+        except Exception:
+            logger.exception("Draining the crawl saver for agent %s failed", agent_id)
         try:  # best-effort failure reporting — never mask the original error
             failed_run = _build_last_run(
                 started_at=started_wall,
@@ -786,13 +948,24 @@ async def execute_crawl(
             await _set_agent_status(
                 db, agent_id, AgentStatus.FAILED, acting_email, last_run=failed_run
             )
+            runtime = round(time.monotonic() - started, 1)
             await connection_manager.manager.broadcast(
                 _status_frame(
                     frame_agent,
                     AgentStatus.FAILED,
-                    runtimeSeconds=round(time.monotonic() - started, 1),
+                    runtimeSeconds=runtime,
                     message="Crawl failed; see server logs for details",
                 )
+            )
+            _push_event(
+                agent_id,
+                _done_event(
+                    frame_agent,
+                    AgentStatus.FAILED,
+                    runtime_seconds=runtime,
+                    last_run=failed_run,
+                    message="Crawl failed; see server logs for details",
+                ),
             )
         except Exception:
             logger.exception(

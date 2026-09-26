@@ -78,7 +78,7 @@ All routes are prefixed with `/api/v1`. JSON uses camelCase
 | GET | `/agents/{agentId}` | Bearer | — | `200` `AgentOut` | `401`, `404` |
 | PATCH | `/agents/{agentId}` | Bearer | any of `{name, script, format, type, status}` | `200` `AgentOut` | `400` invalid JSON script, `409` dup name, `404`, `422` |
 | DELETE | `/agents/{agentId}` | Bearer | — | `204` (its data docs' `agentId` → `null`; `agentName` kept) | `401`, `404` |
-| GET | `/agents/{agentId}/run` | Bearer | — | `202` `AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` already running, `400` script not runnable |
+| GET | `/agents/{agentId}/run` | Bearer | — | `200` SSE stream (`text/event-stream`): `start` → one `document` event per crawled page as it is saved → terminal `done` event; `: keep-alive` comments every 15 s idle; disconnecting the stream does NOT stop the crawl | `401`, `404`, `409` already running, `400` script not runnable (raised as JSON before the stream opens) |
 | GET | `/agents/{agentId}/data` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `DataList` `{data, total}` (newest first) | `401`, `404` |
 | GET | `/data/orphaned` | Bearer | query: `limit` (1–100, def 50), `skip` (≥0) | `200` `DataList` `{data, total}` (newest first; records whose agent was deleted — `agentId` is `null`) | `401`, `422` |
 | DELETE | `/data` | Bearer | `{ids}` (list, ≥1) | `200` `{"deleted": n}` | `401`, `422` |
@@ -213,13 +213,15 @@ async def main():
         print(await ws.recv())  # first notification
 asyncio.run(main())"
 
-# Run an agent: 202 + status Running, then agentStatus frames on the WS above
-# (Running immediately; Completed/Failed with runtimeSeconds, count and the
-# crawled data — or a failure message — when finished).
+# Run an agent: an SSE stream (-N to disable buffering). Events: `start`,
+# then one `document` per crawled page as it is SAVED (DataOut payload), then
+# terminal `done` with {status, runtimeSeconds, count, lastRun} — the same
+# outcome also goes out as an agentStatus frame on the WS above. Start errors
+# (409/400/404/401) come back as ordinary JSON before the stream opens.
 # A runnable script is a JSON object: "links" = list of URLs to crawl, every
 # other key = field name mapped to one XPath or a list of fallback XPaths
 # (tried in order until one matches; element matches yield their text).
-curl -s $BASE/agents/<agentId>/run -H "Authorization: Bearer <accessToken>"
+curl -sN $BASE/agents/<agentId>/run -H "Authorization: Bearer <accessToken>"
 
 # List the crawled data an agent produced (newest first, paginated)
 curl -s "$BASE/agents/<agentId>/data?limit=20&skip=0" -H "Authorization: Bearer <accessToken>"

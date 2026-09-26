@@ -26,7 +26,7 @@ paths:
 | GET | `/api/v1/agents/{agentId}` | Bearer | — | `200 AgentOut` (carries `lastRun` when the agent has run) | `401`, `404` |
 | PATCH | `/api/v1/agents/{agentId}` | Bearer | any of `{name, script, format, type, sourceType, status}` | `200 AgentOut` | `400` invalid JSON script (merged view; source_pages structure checked on the merged sourceType+script pair), `409` dup name, `404`, `422` |
 | DELETE | `/api/v1/agents/{agentId}` | Bearer | — | `204` (its data docs' `agentId` → `null`; stored credentials deleted) | `401`, `404` |
-| GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `202 AgentOut` (status `Running`; crawl continues in the background) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, > `CRAWL_MAX_PAGES` links, non-http(s) or — for `sourceType: facebook` — non-facebook links; source_pages: non-http(s) source pages, > `CRAWL_MAX_PAGES` source pages, same structure rules as create; ecommerce: non-http(s) seeds, > `CRAWL_MAX_PAGES` seeds, `max_products` > `ECOMMERCE_MAX_PRODUCTS`, same structure rules as create), `503` facebook credentials undecryptable |
+| GET | `/api/v1/agents/{agentId}/run` | Bearer | — | `200 text/event-stream` (SSE): `event: start` → one `event: document` per crawled page, streamed as each doc is SAVED (DataOut payload, save order) → `event: done` `{status, runtimeSeconds, count, lastRun, message?}` closing the stream; `: keep-alive` comments every 15 s of silence; client disconnect does NOT stop the crawl (the terminal frame still goes out over the WS broadcast) | `401`, `404`, `409` "Agent is already running", `400` script not runnable (non-json format, bad structure, > `CRAWL_MAX_PAGES` links, non-http(s) or — for `sourceType: facebook` — non-facebook links; source_pages: non-http(s) source pages, > `CRAWL_MAX_PAGES` source pages, same structure rules as create; ecommerce: non-http(s) seeds, > `CRAWL_MAX_PAGES` seeds, `max_products` > `ECOMMERCE_MAX_PRODUCTS`, same structure rules as create), `503` facebook credentials undecryptable — all raised BEFORE the stream opens, as ordinary JSON errors |
 | POST | `/api/v1/agents/{agentId}/stop` | Bearer | — | `202 AgentOut` (still `Running` in the body; Stopped lands via the WS broadcast after in-flight requests settle) | `401`, `404`, `409` "Agent is not running" |
 | PUT | `/api/v1/agents/{agentId}/credentials` | Bearer | `{cookieHeader?, proxyText?}` (raw pastes; at least one) | `200 AgentOut` (`hasCookies`/`hasProxies` flags updated; values stored Fernet-encrypted, NEVER returned) | `400` unparseable cookies / bad proxy URL / >20 proxies / both empty, `404`, `503` `CREDENTIALS_ENCRYPTION_KEY` unset/invalid |
 | GET | `/api/v1/agents/{agentId}/credentials-metadata` | Bearer | — | `200 {cookieNames: [...], proxyCount, updatedAt}` (non-secret summary) | `401`, `404` |
@@ -64,21 +64,33 @@ When adding/removing/changing an endpoint, update this table and the README.
   Agent names are unique (`409` on create and on rename). `updatedBy` is
   server-derived from the authenticated user (creator on create, patcher on
   update) — never accepted from the request body.
-- `GET /agents/{agentId}/run` (`crawler_service.start_agent_crawl`) runs the
-  agent's script as a background Scrapy crawl: run-time script validation
+- `GET /agents/{agentId}/run` (`crawler_service.start_agent_crawl` +
+  `crawler_service.sse_events`) runs the agent's script as a background Scrapy
+  crawl and streams it over SSE: run-time script validation
   (`_parse_run_script`) → atomic Running claim (`find_one_and_update` with
   `status != Running` — the refresh-rotation idiom; race loser gets `409`) →
-  broadcast a `Running` frame → `asyncio.create_task(execute_crawl)`. The task
-  registry `_running_crawls` (`_RunningCrawl`: task + runner + stop_requested)
-  double-guards re-runs (PATCH-proof) and backs `POST .../stop`. Every link
-  carries an errback that classifies download failures (`broken_link` 404,
-  `rate_limited` 429, `timeout`, `dns_error`, `connection_error`,
-  `proxy_error`, `cancelled`, … — constants in `app/models/crawl.py`). On
-  finish: one `data` doc per crawled page, a terminal status of `Completed` /
-  `Stopped` / `Failed`, a `lastRun` summary written ATOMICALLY with the status
-  flip (`{startedAt, finishedAt, outcome, totalLinks, successCount,
+  broadcast a `Running` frame → `asyncio.create_task(execute_crawl)` → the
+  route returns `StreamingResponse(sse_events(...))`. The task
+  registry `_running_crawls` (`_RunningCrawl`: task + runner + stop_requested
+  + listeners) double-guards re-runs (PATCH-proof) and backs
+  `POST .../stop`; `listeners` are the SSE event queues (registered in
+  `start_agent_crawl` BEFORE the crawl task spawns — no lost-event race;
+  `sse_events` unregisters on any generator exit, incl. client disconnect).
+  Every link carries an errback that classifies download failures
+  (`broken_link` 404, `rate_limited` 429, `timeout`, `dns_error`,
+  `connection_error`, `proxy_error`, `cancelled`, … — constants in
+  `app/models/crawl.py`). Documents are saved ONE BY ONE as the crawl
+  produces them (`data_service.build_data_doc` + `insert_one` via the run's
+  saver task — single consumer, so save/emit order is crawl order; a failed
+  insert records a `request_error` failure and is NOT streamed), and each
+  SAVED doc is pushed to every listener as an SSE `document` event. On
+  finish (the saver is drained BEFORE finalizing — no doc can slip past the
+  mid-crawl detach): a terminal status of `Completed` / `Stopped` / `Failed`,
+  a `lastRun` summary written ATOMICALLY with the status flip
+  (`{startedAt, finishedAt, outcome, totalLinks, successCount,
   failureCount, failures: [{url, reason, detail?}]}`, capped at 100 entries),
-  and a broadcast frame carrying it. A GET with side effects by explicit user
+  a broadcast frame carrying it (+ the saved `data`), and the SSE `done`
+  event that closes the stream. A GET with side effects by explicit user
   request — safe from prefetchers because it requires Bearer auth. Startup
   sweep (`reset_interrupted_crawls`) flips restart-orphaned `Running` agents
   to `Failed` (with a `cancelled` lastRun entry). If the agent is deleted
